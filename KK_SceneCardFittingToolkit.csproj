@@ -1,0 +1,115 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 编译目标：net35（BepInEx 5 / Unity 2019.4 Mono）。
+       本机没装 .NET Framework 3.5 开发包，所以关掉隐式框架引用，
+       直接引用游戏自带的那套 mscorlib/System/UnityEngine（和
+       python_tools/4_AutoSceneExport/plugin 的做法一致，无需 NuGet 还原）。 -->
+
+  <PropertyGroup>
+    <TargetFramework>net46</TargetFramework>
+    <AssemblyName>KK_SceneCardFittingToolkit</AssemblyName>
+    <RootNamespace>KKPEHeightLock</RootNamespace>
+    <LangVersion>7.3</LangVersion>
+    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+    <TargetFrameworkRootPath>$(MSBuildThisFileDirectory)_refasm\</TargetFrameworkRootPath>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <DebugType>none</DebugType>
+    <Optimize>true</Optimize>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\</OutputPath>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>CS0169;CS0414;CS0649;CS0108;CS0114;CS0162</NoWarn>
+    <GameDir Condition="'$(GameDir)' == ''">D:\game\LL\LL2\K_K_S</GameDir>
+    <ManagedDir>$(GameDir)\CharaStudio_Data\Managed</ManagedDir>
+    <CoreDir>$(GameDir)\BepInEx\core</CoreDir>
+    <PluginDir>$(GameDir)\BepInEx\plugins</PluginDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="src\*.cs" />
+    <Compile Include="src\UI\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="mscorlib">
+      <HintPath>$(ManagedDir)\mscorlib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="System">
+      <HintPath>$(ManagedDir)\System.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="System.Core">
+      <HintPath>$(ManagedDir)\System.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(ManagedDir)\UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(ManagedDir)\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(ManagedDir)\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- 场景卡/角色卡预览要用 Texture2D.LoadImage 自己解 PNG -->
+    <Reference Include="UnityEngine.ImageConversionModule">
+      <HintPath>$(ManagedDir)\UnityEngine.ImageConversionModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- 导出清场要按 Canvas 藏掉所有 uGUI -->
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx">
+      <HintPath>$(CoreDir)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(CoreDir)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="KKSAPI">
+      <HintPath>$(PluginDir)\KKSAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="KKSPE">
+      <HintPath>$(PluginDir)\KKSPE.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Timeline">
+      <HintPath>$(PluginDir)\Timeline.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="VRGIN_OpenXR">
+      <HintPath>$(PluginDir)\KKS_VR\VRGIN_OpenXR.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="KKS_CharaStudioVR">
+      <HintPath>$(PluginDir)\KKS_VR\KKS_CharaStudioVR.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
