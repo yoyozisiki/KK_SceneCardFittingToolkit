@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using UnityEngine;
 
@@ -46,6 +47,10 @@ namespace KKPEHeightLock
                     if (oci.sex != 1) continue;                 // 只换女角色
                     var sceneBody = BodySnap.Capture(oci);
                     oci.ChangeChara(o.FemaleCard);
+                    // 换人只保证服装换掉，饰品槽的显隐会被原角色/AccStateSync 继承下来，
+                    // 而不少卡把头发做成饰品（"Accessories: 01 lulum hair"）→ 成片光头。
+                    // 所以换完先全部显示，卡片自己标了隐藏的再按卡还愿。
+                    ShowAllAccessories(oci);
                     var cardBody = BodySnap.Capture(oci);
                     BodySnap.Compose(oci, sceneBody, cardBody, o);
                     swapped.Add(oci);
@@ -71,6 +76,377 @@ namespace KKPEHeightLock
                 for (int i = 0; i < swapped.Count; i++) BodySnap.LockHeight(swapped[i]);
 
             Log($"替换完成：{done} 个 female");
+        }
+
+        /// <summary>
+        /// 换人后把所有饰品槽恢复成「显示」。
+        ///
+        /// 为什么需要：不少角色卡直接拿饰品当头发用（卡片里写着 "Accessories: 01 lulum hair"），
+        /// 而 ChangeChara 之后饰品槽的显隐会被原角色 / AccStateSync 这类插件继承下来 ——
+        /// 原场景角色身上关掉的槽，新角色的同槽位也跟着关，发型饰品被一起藏掉，
+        /// 成片里就是光头、只剩下衣服。
+        ///
+        /// 所以换完人默认全部打开；角色卡自己把这些槽标成「隐藏」的，再按卡还原回去，
+        /// 保证「卡里想藏的还能藏，只是不再被场景/旧角色带着一起藏」。
+        /// </summary>
+        private static void ShowAllAccessories(Studio.OCIChar oci)
+        {
+            try
+            {
+                var ci = oci != null ? oci.charInfo : null;
+                if (ci == null) return;
+
+                var coord = ci.nowCoordinate;
+                var acc = coord != null ? coord.accessory : null;
+                var parts = acc != null ? acc.parts : null;
+
+                // 1) 先全部显示（解决「饰品当头发」的卡换人后变光头）
+                ci.SetAccessoryStateAll(true);
+
+                // 2) 再按当前衣服状态收一遍：上衣半脱时挂在衣服上的饰品（蝴蝶结之类）
+                //    要跟着藏起来，不能全亮着悬空。这一步交给 AccStateSync 自己算，
+                //    它存着每个饰品跟哪件衣服、哪个状态绑定的规则。
+                int synced = ApplyClothingStateToAccessories(ci);
+
+                // 3) 卡片自己标了「隐藏」的槽，按卡还原
+                int hidden = 0;
+                if (parts != null)
+                {
+                    for (int i = 0; i < parts.Length; i++)
+                    {
+                        var part = parts[i];
+                        if (part == null) continue;
+                        if (Convert.ToInt32(part.hideCategory) == 0) continue;
+                        try { ci.SetAccessoryState(i, false); hidden++; }
+                        catch (Exception) { }
+                    }
+                }
+
+                Log($"换人后饰品处理：全部显示 → 按衣服状态同步{(synced > 0 ? "（AccStateSync 生效）" : "（未找到 AccStateSync）")}"
+                    + $" → 按卡还原隐藏 {hidden} 个（共 {(parts != null ? parts.Length : 0)} 槽）");
+            }
+            catch (Exception e) { Log("[提示] 显示全部饰品失败：" + e.Message); }
+        }
+
+        /// <summary>
+        /// 让 AccStateSync 按「当前衣服状态」把所有饰品重算一遍显隐。
+        ///
+        /// 为什么需要：把饰品全部打开是为了救「饰品当头发」的卡（否则换人后光头），
+        /// 但一刀切全开会把跟衣服联动的饰品也点亮 —— 上衣半脱时蝴蝶结还悬在半空。
+        /// AccStateSync 里存着「哪个饰品跟哪件衣服的哪个状态绑定」的规则，
+        /// 调用它的 SyncAllAccToggle 就等价于用户手动改衣服状态时它自动重算的那一下。
+        ///
+        /// 全部走反射：AccStateSync 是可选依赖，没装就只保留「全部显示」，
+        /// 不影响导出。返回 1 表示成功重算。
+        /// </summary>
+        private static int ApplyClothingStateToAccessories(ChaControl ci)
+        {
+            if (ci == null) return 0;
+            try
+            {
+                // ---- 1) 找 AccStateSync 的入口类型（先按全名，再按程序集扫）
+                var t = HarmonyLib.AccessTools.TypeByName("AccStateSync.AccStateSync");
+                if (t == null)
+                {
+                    foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        var an = asm.GetName().Name;
+                        if (an == null || an.IndexOf("AccStateSync", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        t = asm.GetType("AccStateSync.AccStateSync");
+                        if (t != null) break;
+                    }
+                }
+                if (t == null)
+                {
+                    Log("[提示] 场景里没加载 AccStateSync（找不到 AccStateSync.AccStateSync 类型），饰品只能全部显示");
+                    return 0;
+                }
+
+                // ---- 2) 拿这个角色的状态控制器
+                object ctrl = null;
+                var mGet = t.GetMethod("GetController",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                if (mGet != null)
+                {
+                    try { ctrl = mGet.Invoke(null, new object[] { ci }); }
+                    catch (Exception e) { Log("[提示] AccStateSync.GetController 抛错：" + e.Message); }
+                }
+                else Log("[提示] AccStateSync 里没有 GetController 方法");
+
+                // 兜底：控制器本身就是挂在角色身上的 MonoBehaviour，直接按类型名找（含子物体）
+                if (ctrl == null)
+                {
+                    var comps = ci.GetComponentsInChildren<MonoBehaviour>(true);
+                    for (int i = 0; i < comps.Length; i++)
+                    {
+                        var c = comps[i];
+                        if (c == null) continue;
+                        if (c.GetType().Name == "AccStateSyncController") { ctrl = c; break; }
+                    }
+                }
+                if (ctrl == null)
+                {
+                    Log("[提示] 这个角色身上没有 AccStateSync 控制器（插件没对它生效），跳过按衣服状态同步");
+                    return 0;
+                }
+
+                var ct = ctrl.GetType();
+                const BindingFlags Inst =
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+
+                // ---- 3) 触发系统没开的话同步是空转，先确保它是开的
+                var fTrigger = ct.GetField("TriggerEnabled", Inst);
+                if (fTrigger != null && fTrigger.FieldType == typeof(bool) &&
+                    !(bool)fTrigger.GetValue(ctrl))
+                {
+                    fTrigger.SetValue(ctrl, true);
+                    Log("[提示] AccStateSync 触发系统原本是关的，已临时打开");
+                }
+
+                // ---- 4) 直接按卡里的规则算，不再指望插件自己动
+                // 前面试过 SyncAllAccToggle / SetGroupState / 制造衣服状态变化，
+                // 都不动饰品（大概率它的钩子只处理面板交互那条路径）。这里改成
+                // 读它的 TriggerPropertyList，自己按「当前每个衣服部件的状态」算每个
+                // 饰品槽该不该显示：
+                //   规则 = { Coordinate, Slot, RefKind, RefState, Visible, Priority }
+                //     · RefKind 是衣服部件编号（0 上衣 / 1 下衣 / 2 胸罩 …）
+                //     · RefState 是该部件的一个状态（0=on, 1=1/2, 2=off）
+                //     · 当前 RefKind 的状态等于 RefState 时，这条规则生效；
+                //       同一个槽有多条生效时取 Priority 最大的那条。
+                var states = ci.fileStatus != null ? ci.fileStatus.clothesState : null;
+                if (states == null) return 0;
+
+                int curCoord = -1;
+                try
+                {
+                    var fs = ci.fileStatus;
+                    var pr = fs != null ? fs.GetType().GetProperty("coordinateType") : null;
+                    if (pr != null) curCoord = Convert.ToInt32(pr.GetValue(fs, null));
+                }
+                catch (Exception) { }
+
+                var fList = ct.GetField("TriggerPropertyList", Inst);
+                var raw = fList != null ? fList.GetValue(ctrl) as IEnumerable : null;
+                if (raw == null)
+                {
+                    Log("[提示] 拿不到 AccStateSync 的 TriggerPropertyList，饰品无法按衣服状态收");
+                    return 0;
+                }
+
+                // 按槽位归堆（只留当前服装槽的规则）
+                var bySlot = new Dictionary<int, List<object>>();
+                int total = 0;
+                foreach (var p in raw)
+                {
+                    if (p == null) continue;
+                    total++;
+                    try
+                    {
+                        var pt = p.GetType();
+                        int coord = Convert.ToInt32(pt.GetProperty("Coordinate").GetValue(p, null));
+                        if (curCoord >= 0 && coord != curCoord) continue;
+                        int slot = Convert.ToInt32(pt.GetProperty("Slot").GetValue(p, null));
+                        List<object> lst;
+                        if (!bySlot.TryGetValue(slot, out lst)) { lst = new List<object>(); bySlot[slot] = lst; }
+                        lst.Add(p);
+                    }
+                    catch (Exception) { }
+                }
+
+                int changed = 0, hiddenCount = 0;
+                var sb = new System.Text.StringBuilder();
+                foreach (var kv in bySlot)
+                {
+                    int slot = kv.Key;
+                    object best = null;
+                    int bestPri = int.MinValue;
+                    foreach (var p in kv.Value)
+                    {
+                        try
+                        {
+                            var pt = p.GetType();
+                            int refKind = Convert.ToInt32(pt.GetProperty("RefKind").GetValue(p, null));
+                            int refState = Convert.ToInt32(pt.GetProperty("RefState").GetValue(p, null));
+                            if (refKind < 0 || refKind >= states.Length) continue;
+                            if (states[refKind] != refState) continue;      // 这条规则对当前状态不适用
+                            int pri = Convert.ToInt32(pt.GetProperty("Priority").GetValue(p, null));
+                            if (pri > bestPri) { bestPri = pri; best = p; }
+                        }
+                        catch (Exception) { }
+                    }
+                    if (best == null) continue;
+
+                    bool visible = (bool)best.GetType().GetProperty("Visible").GetValue(best, null);
+                    try
+                    {
+                        ci.SetAccessoryState(slot, visible);
+                        changed++;
+                        if (!visible) hiddenCount++;
+                        // 只把前 10 个槽的结果写进日志，方便对面板
+                        if (slot < 10) sb.Append(" 槽" + (slot + 1) + "=" + (visible ? "on" : "off"));
+                    }
+                    catch (Exception) { }
+                }
+
+                // 界面上那一排开关也对齐一下（纯 UI）
+                var mSync = ct.GetMethod("SyncAllAccToggle", Inst);
+                if (mSync != null)
+                {
+                    try { mSync.Invoke(ctrl, new object[] { "AutoExport" }); }
+                    catch (Exception) { }
+                }
+
+                Log("[饰品] 规则表共 " + total + " 条，按当前衣服状态生效 " + changed
+                    + " 个槽（藏起 " + hiddenCount + " 个，服装槽 #" + curCoord + "）"
+                    + (sb.Length > 0 ? "：" + sb.ToString() : ""));
+                return changed;
+            }
+            catch (Exception e)
+            {
+                Log("[提示] 按衣服状态同步饰品失败：" + e.GetType().Name + " " + e.Message);
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// 关掉场景里「独立动态骨骼碰撞体」（[J694] Dynamic Bone Collider 这类）对
+        /// **female 衣服 / 头发 / 饰品**的吸附效果。
+        ///
+        /// 手动操作是：选中 Dynamic Bone Collider → KKPE 高级模式 → 把 female 的
+        /// 衣服 / 头发那一排 on 逐个取消。这里调 KKPE 的单点接口
+        /// <c>CollidersEditor.SetIgnoreDynamicBone(collider, 角色控制器, 动骨, true)</c>，
+        /// 只断 female 的这三类部件：
+        ///   · male 的动骨、角色本体/胸部动骨一律不动 —— 之前用
+        ///     SetIgnoreAllDynamicBones 一刀切，把 male 的节点也断掉了，这里改回来；
+        ///   · 碰撞体只处理挂在道具上的独立碰撞体（_isLoneCollider）。
+        /// </summary>
+        private static int TurnOffDynamicBoneColliders()
+        {
+            int colliderCount = 0, boneCount = 0, noEditor = 0, scanned = 0;
+            try
+            {
+                var pcType = HarmonyLib.AccessTools.TypeByName("HSPE.PoseController");
+                var ceType = HarmonyLib.AccessTools.TypeByName("HSPE.AMModules.CollidersEditor");
+                var targetType = HarmonyLib.AccessTools.TypeByName("HSPE.AMModules.GenericOCITarget");
+                if (pcType == null || ceType == null || targetType == null)
+                {
+                    Log("[提示] 没找到 KKPE 的碰撞体模块，跳过关闭吸附");
+                    return 0;
+                }
+
+                const BindingFlags Inst =
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+                const BindingFlags Stat =
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
+
+                var fControllers = pcType.GetField("_poseControllers", Stat);
+                var fTarget = pcType.GetField("_target", Inst);
+                var fEditor = pcType.GetField("_collidersEditor", Inst);
+                var fOciItem = targetType.GetField("ociItem", Inst);
+                var fOciChar = targetType.GetField("ociChar", Inst);
+                var fCollider = ceType.GetField("_colliderTarget", Inst);
+                var fLone = ceType.GetField("_isLoneCollider", Inst);
+                var mIgnore = ceType.GetMethod("SetIgnoreDynamicBone", Inst);
+
+                if (fControllers == null || fTarget == null || fEditor == null || fOciItem == null ||
+                    fOciChar == null || fCollider == null || mIgnore == null)
+                {
+                    Log("[提示] KKPE 碰撞体接口字段对不上，跳过关闭吸附");
+                    return 0;
+                }
+
+                var box = fControllers.GetValue(null) as IEnumerable;
+                if (box == null) return 0;
+
+                var editors = new List<object>();                        // 独立碰撞体的 CollidersEditor
+                var colliders = new List<object>();                      // 一一对应的 DynamicBoneCollider
+                var charPc = new Dictionary<Studio.OCIChar, object>();   // 角色 → 它的 PoseController
+
+                foreach (var entry in box)
+                {
+                    object pc = entry;
+                    // _poseControllers 可能是 List 也可能是 Dictionary，字典项取 Value
+                    if (pc != null && pc.GetType().IsGenericType &&
+                        pc.GetType().GetGenericTypeDefinition() == typeof(KeyValuePair<,>))
+                        pc = pc.GetType().GetProperty("Value").GetValue(pc, null);
+                    if (pc == null) continue;
+
+                    scanned++;
+                    var target = fTarget.GetValue(pc);
+                    if (target == null) continue;
+
+                    // 角色：先记下它的控制器，稍后按 female 逐个处理
+                    var ociChar = fOciChar.GetValue(target) as Studio.OCIChar;
+                    if (ociChar != null) { charPc[ociChar] = pc; continue; }
+
+                    // 道具：只认「独立碰撞体」
+                    if (fOciItem.GetValue(target) as Studio.OCIItem == null) continue;
+
+                    var editor = fEditor.GetValue(pc);
+                    if (editor == null) { noEditor++; continue; }
+
+                    var collider = fCollider.GetValue(editor);
+                    if (collider == null) continue;
+                    if (fLone != null && !(bool)fLone.GetValue(editor)) continue;
+
+                    editors.Add(editor);
+                    colliders.Add(collider);
+                    colliderCount++;
+                }
+
+                // 只断 female 的衣服 / 头发 / 饰品；male 与角色本体的动骨一律不动
+                foreach (var kv in charPc)
+                {
+                    var oci = kv.Key;
+                    if (oci == null || oci.sex != 1) continue;              // 1 = female
+                    var ci = oci.charInfo;
+                    if (ci == null) continue;
+
+                    var parts = new List<GameObject>();
+                    AddIfAny(parts, ci.objHair);
+                    AddIfAny(parts, ci.objClothes);
+                    AddIfAny(parts, ci.objAccessory);
+
+                    var bones = new List<object>();
+                    for (int i = 0; i < parts.Count; i++)
+                    {
+                        var go = parts[i];
+                        if (go == null) continue;
+                        foreach (var d in go.GetComponentsInChildren<DynamicBone>(true)) bones.Add(d);
+                        foreach (var d in go.GetComponentsInChildren<DynamicBone_Ver02>(true)) bones.Add(d);
+                    }
+                    if (bones.Count == 0) { continue; }
+
+                    for (int e = 0; e < editors.Count; e++)
+                    {
+                        for (int b = 0; b < bones.Count; b++)
+                        {
+                            try
+                            {
+                                mIgnore.Invoke(editors[e],
+                                    new object[] { colliders[e], kv.Value, bones[b], true });
+                                boneCount++;
+                            }
+                            catch (Exception) { }
+                        }
+                    }
+                }
+
+                Log("[碰撞体] 已关闭 " + colliderCount + " 个独立碰撞体对 female 的吸附"
+                    + "（衣服/头发/饰品动骨 " + boneCount + " 处，扫了 " + scanned + " 个 KKPE 对象"
+                    + (noEditor > 0 ? "，" + noEditor + " 个道具没生成 KKPE 编辑器" : "")
+                    + "；male 与本体动骨未改动）");
+            }
+            catch (Exception e) { Log("[提示] 关闭动态骨骼碰撞体吸附失败：" + e.Message); }
+            return boneCount;
+        }
+
+        /// <summary>把数组里非空的 GameObject 收进列表（objHair / objClothes / objAccessory 用）。</summary>
+        private static void AddIfAny(List<GameObject> list, GameObject[] arr)
+        {
+            if (arr == null) return;
+            for (int i = 0; i < arr.Length; i++)
+                if (arr[i] != null) list.Add(arr[i]);
         }
 
         private static string[] _clothesKindNames;
@@ -313,22 +689,8 @@ namespace KKPEHeightLock
             done(ok && File.Exists(output));
         }
 
-        /// <summary>
-        /// 拼 ffmpeg 的 -vf 串：泛光 → 暗角 → 淡入淡出（顺序和 6_视频后期 一致）。
-        /// RealtimeFx 打开时 EffectiveBloom/EffectiveVignette 会返回 Off，
-        /// 因为这两样已经由 ReShade 在 GPU 上实时做完了，这里只剩淡入淡出。
-        /// </summary>
-
-        /// <summary>
-        /// 开了实时效果之后，把下拉框选的强度写进 ReShade 预设
-        /// （`&lt;游戏根目录&gt;/KK_BloomVignette.ini`），这样界面选「中」就真的是中，
-        /// 不用再开 ReShade 面板手调。ReShade 会监视预设文件，改完自己重载。
-        /// 映射关系照 KK_BloomVignette.fx 里的注释：
-        ///   暗角 VignetteStrength = (1 - cos(PI/n)^4) / 0.85
-        /// 其中 n 就是 ffmpeg vignette 那个 PI/n 的 n，所以两边曲线是同一族。
-        /// </summary>
-        // ---- ReShade 预设路径（SyncReshadePreset 用）
-        private static string _rsPath;
+        // ============================================================ ReShade
+        // 本插件**只读不写** ReShade 预设。理由见 CheckReshadePreset 的注释。
 
         /// <summary>
         /// ReShade 到底会读哪个预设文件。`ReShade.ini` 里的 `PresetPath` 才是
@@ -366,123 +728,102 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 把泛光/暗角参数并进当前预设。**不能整文件覆盖** —— 用户预设里
-        /// 可能还有别的效果，覆盖掉等于把人家的配置删了。
-        /// 做法：保留原文，只保证 `Techniques=` 里有我们这一条，
-        /// 再把 `[KK_BloomVignette.fx]` 这一段替换成新值。
-        /// </summary>
-        private static void WriteReshadePreset(string path, float thr, float intensity,
-                                               float radius, float vig)
-        {
-            const string Effect = "KK_BloomVignette.fx";
-            const string Tech = "KK_BloomVignette@" + Effect;
-
-            var lines = new List<string>();
-            if (File.Exists(path))
-            {
-                try { lines.AddRange(File.ReadAllLines(path)); }
-                catch (Exception) { }
-            }
-
-            bool hasTech = false, hasSort = false;
-            for (int i = 0; i < lines.Count; i++)
-            {
-                string s = lines[i];
-                if (s.StartsWith("Techniques=", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (s.IndexOf(Tech, StringComparison.OrdinalIgnoreCase) < 0) lines[i] = s + "," + Tech;
-                    hasTech = true;
-                }
-                else if (s.StartsWith("TechniqueSorting=", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (s.IndexOf(Tech, StringComparison.OrdinalIgnoreCase) < 0) lines[i] = s + "," + Tech;
-                    hasSort = true;
-                }
-            }
-            if (!hasTech) lines.Add("Techniques=" + Tech);
-            if (!hasSort) lines.Add("TechniqueSorting=" + Tech);
-
-            int start = -1;
-            for (int i = 0; i < lines.Count; i++)
-            {
-                if (lines[i].Trim().Equals("[" + Effect + "]", StringComparison.OrdinalIgnoreCase))
-                { start = i; break; }
-            }
-            if (start >= 0)
-            {
-                int end = start + 1;
-                while (end < lines.Count)
-                {
-                    string t = lines[end].Trim();
-                    if (t.Length > 2 && t[0] == '[' && t[t.Length - 1] == ']') break;
-                    end++;
-                }
-                lines.RemoveRange(start, end - start);
-            }
-
-            while (lines.Count > 0 && lines[lines.Count - 1].Trim().Length == 0)
-                lines.RemoveAt(lines.Count - 1);
-            lines.Add("");
-            lines.Add("[" + Effect + "]");
-            lines.Add("BloomThreshold=" + thr.ToString("0.000000", CultureInfo.InvariantCulture));
-            lines.Add("BloomIntensity=" + intensity.ToString("0.000000", CultureInfo.InvariantCulture));
-            lines.Add("BloomRadius=" + radius.ToString("0.000000", CultureInfo.InvariantCulture));
-            lines.Add("VignetteStrength=" + vig.ToString("0.000000", CultureInfo.InvariantCulture));
-
-            File.WriteAllText(path, string.Join("\r\n", lines.ToArray()) + "\r\n",
-                new UTF8Encoding(false));
-        }
-
-        /// <summary>
         /// 淡入淡出：一律在屏上盖黑遮罩，交给 ReShade 是**做不到**的。
         ///
         /// 试过让 shader 里加个 `Fade` uniform、导出时逐帧改写预设文件：
-        /// 实测 ReShade 6.8 **只在启动时读一次预设**，运行时改文件不会重载
-        /// （改完 Fade=1 再截图，画面一点没变，ReShade.log 里也没有重新编译）。
-        /// 所以逐帧改文件这条路是死的，只能退回屏上遮罩。
+        /// 画质一点没变（ReShade.log 里也没有重新编译），逐帧改文件这条路是死的，
+        /// 只能退回屏上遮罩。
+        /// 注意：预设**不是**「只在启动时读一次」—— 改窗口尺寸会把 ReShade 的
+        /// 运行环境整个重建、顺手重读预设（ReShade.log 里那串
+        /// "Destroyed / Recreated runtime environment"）。所以别指望「写了不生效」，
+        /// 写进去的值很可能下一刻就上屏 —— 这也是本插件不许碰预设文件的原因。
         /// </summary>
         private static void ApplyFade(float a)
         {
             SetFadeBlack(a);
         }
 
-        public static void SyncReshadePreset(ExportOptions o)
+        // ---- ReShade 效果名 / technique 名（只用来读预设、写日志）
+        private const string FxEffect = "KK_BloomVignette.fx";
+        private const string FxTech = "KK_BloomVignette@" + FxEffect;
+
+        /// <summary>
+        /// 导出前**只读**看一眼 ReShade 预设：technique 开没开、当前四个参数是多少，打进日志。
+        ///
+        /// 这里以前是 <c>SyncReshadePreset()</c>，会把界面档位换算成参数**写回预设文件**
+        /// （`[KK_BloomVignette.fx]` 整段删掉重建）。后果很直接：
+        /// 用户在 ReShade 面板（Home 键）里手调好的泛光/暗角，一点「开始导出」就被
+        /// 换成本插件配置里的默认档位（`Vignette=Strong / Bloom=Medium` →
+        /// 阈值 0.62 / 强度 0.35 / 半径 4 / 暗角 0.87），
+        /// 而且导出时 VideoExport 会改窗口尺寸，ReShade 借机重建运行环境、
+        /// 重新读一遍预设 —— 于是手调的值当场失效，录出来的片子也是默认档位。
+        /// 所以现在禁止本插件写任何 ReShade 文件：参数归用户，插件只读不写。
+        /// </summary>
+        public static void CheckReshadePreset()
         {
-            _rsPath = null;
-            if (!o.RealtimeFx) return;
-            string path = null;
             try
             {
-                path = ResolveReshadePresetPath();
-
-                float thr = 1f, intensity = 0f, radius = 0f;
-                switch (o.Bloom)
+                string path = ResolveReshadePresetPath();
+                if (!File.Exists(path))
                 {
-                    case FxLevel.Weak: thr = 0.72f; intensity = 0.22f; radius = 3f; break;
-                    case FxLevel.Medium: thr = 0.62f; intensity = 0.35f; radius = 4f; break;
-                    case FxLevel.Strong: thr = 0.52f; intensity = 0.50f; radius = 6f; break;
+                    Log("[ReShade] 没找到预设文件：" + path
+                        + "（泛光/暗角完全按 ReShade 当前状态走，本插件不改）");
+                    return;
                 }
 
-                float vig = 0f;
-                switch (o.Vignette)
+                bool techOn = false, techSeen = false;
+                string section = null;
+                var vals = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string raw in File.ReadAllLines(path))
                 {
-                    case FxLevel.Weak: vig = 0.44f; break;   // n=6.6 → 四角留 62%
-                    case FxLevel.Medium: vig = 0.62f; break; // n=5.3 → 四角留 47%
-                    case FxLevel.Strong: vig = 0.87f; break; // n=4.05 → 四角留 26%
+                    string t = raw.Trim();
+                    if (t.Length == 0) continue;
+                    if (t[0] == '[' && t[t.Length - 1] == ']')
+                    {
+                        section = t.Substring(1, t.Length - 2);
+                        continue;
+                    }
+                    int eq = t.IndexOf('=');
+                    if (eq <= 0) continue;
+                    string k = t.Substring(0, eq).Trim();
+                    string v = t.Substring(eq + 1).Trim();
+
+                    if (section == null || section.Length == 0)
+                    {
+                        if (k.Equals("Techniques", StringComparison.OrdinalIgnoreCase))
+                        {
+                            techSeen = true;
+                            if (v.IndexOf(FxTech, StringComparison.OrdinalIgnoreCase) >= 0) techOn = true;
+                        }
+                    }
+                    else if (section.Equals(FxEffect, StringComparison.OrdinalIgnoreCase))
+                    {
+                        vals[k] = v;
+                    }
                 }
 
-                WriteReshadePreset(path, thr, intensity, radius, vig);
-                _rsPath = path;
+                Log("[ReShade] 预设 " + path + "：technique " + (techOn ? "已开启" : "未开启")
+                    + "；阈值=" + GetVal(vals, "BloomThreshold")
+                    + " 泛光=" + GetVal(vals, "BloomIntensity")
+                    + " 半径=" + GetVal(vals, "BloomRadius")
+                    + " 暗角=" + GetVal(vals, "VignetteStrength")
+                    + "（以上是 ReShade 面板里的当前值，本插件只读不写）");
 
-                Log($"[实时效果] 已同步 ReShade 预设：泛光={FxName(o.Bloom)}（阈值 {F(thr)}/强度 {F(intensity)}/半径 {F(radius)}）"
-                    + $"，暗角={FxName(o.Vignette)}（强度 {F(vig)}）"
-                    + "　文件=" + path);
-                Log("[实时效果] ReShade 只在启动时读预设，这次改的强度要下次开游戏才生效");
+                if (!techOn)
+                    Log("[ReShade] 注意：KK_BloomVignette 没有勾上"
+                        + (techSeen ? "" : "（预设里连 Techniques= 都没有）")
+                        + "，成片不会有泛光/暗角 —— 按 Home 打开 ReShade 面板勾一下即可。");
             }
             catch (Exception e)
             {
-                Log("[实时效果] 写 ReShade 预设失败：" + e.Message + (path != null ? "（" + path + "）" : ""));
+                Log("[ReShade] 读预设失败：" + e.Message + "（不影响导出，泛光/暗角按 ReShade 当前状态走）");
             }
+        }
+
+        private static string GetVal(Dictionary<string, string> vals, string key)
+        {
+            string v;
+            return vals.TryGetValue(key, out v) ? v : "?";
         }
 
         /// <summary>日志里那一行「后期：…」。现在只有 ReShade 实时一条路。</summary>
@@ -490,24 +831,10 @@ namespace KKPEHeightLock
         {
             var bits = new List<string>();
             if (o.FadeSeconds > 0f) bits.Add("淡入淡出 " + F(o.FadeSeconds) + "s（直出，不后期）");
-            var live = new List<string>();
-            if (o.Vignette != FxLevel.Off) live.Add("暗角=" + FxName(o.Vignette));
-            if (o.Bloom != FxLevel.Off) live.Add("泛光=" + FxName(o.Bloom));
-            bits.Add("ReShade 实时" + (live.Count > 0 ? "（" + string.Join("、", live.ToArray()) + "）" : "（无）"));
+            bits.Add("ReShade 实时（泛光/暗角用 ReShade 面板里的当前值，插件不改预设）");
             bits.Add("截图=Reshade");
             bits.Add("后期=跳过（直接出片，不重编码）");
             return string.Join("，", bits.ToArray());
-        }
-
-        private static string FxName(FxLevel l)
-        {
-            switch (l)
-            {
-                case FxLevel.Weak: return "弱";
-                case FxLevel.Medium: return "中";
-                case FxLevel.Strong: return "强";
-                default: return "关";
-            }
         }
 
         private static string F(float v)

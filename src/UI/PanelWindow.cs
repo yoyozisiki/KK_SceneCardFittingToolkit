@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 namespace KKPEHeightLock
@@ -14,7 +15,7 @@ namespace KKPEHeightLock
         private const float BarH = 78f;      // 底栏固定高度
 
         private static bool _visible;
-        private static Rect _rect = new Rect(80, 24, 1380, 1000);
+        private static Rect _rect = new Rect(80, 24, 1380, 1072);   // 默认开高一点：右栏设置一屏放得下
         private static bool _rectInit;
         private static Vector2 _logScroll;
 
@@ -76,7 +77,7 @@ namespace KKPEHeightLock
         {
             if (AutoExport.Running)
             {
-                DrawRunning();
+                Guard("运行状态", DrawRunning);
             }
             else
             {
@@ -85,13 +86,13 @@ namespace KKPEHeightLock
 
                 GUILayout.BeginHorizontal(GUILayout.Height(bodyH));
                 GUILayout.BeginVertical(GUILayout.Width(colW), GUILayout.Height(bodyH));
-                DrawSceneColumn(bodyH, colW);
+                Guard("左栏", delegate { DrawSceneColumn(bodyH, colW); });
                 GUILayout.EndVertical();
 
                 GUILayout.Space(10);
 
                 GUILayout.BeginVertical(GUILayout.Width(556), GUILayout.Height(bodyH));
-                DrawRightColumn(bodyH);
+                Guard("右栏", delegate { DrawRightColumn(bodyH); });
                 GUILayout.EndVertical();
                 GUILayout.EndHorizontal();
 
@@ -99,7 +100,7 @@ namespace KKPEHeightLock
                 // 控件全部用绝对坐标，不进 BeginArea —— 实测 BeginArea 里的控件点不动。
                 GUI.DrawTexture(new Rect(0f, _rect.height - BarH + 2f, _rect.width, BarH - 6f),
                     _texPanel);
-                DrawBottomBar();
+                Guard("底栏", DrawBottomBar);
             }
 
             if (GUI.Button(new Rect(_rect.width - 30f, 4f, 24f, 20f), "×", _btnSm))
@@ -108,6 +109,31 @@ namespace KKPEHeightLock
             // 拖拽区要让开右上角按钮，否则按按钮变成拖窗口
             GUI.DragWindow(new Rect(0, 0, _rect.width - 34f, 26f));
         }
+
+        /// <summary>
+        /// 单块内容出错时兜住异常：Begin/End 仍然配对，面板继续能用，
+        /// 只在那一块显示错误，而不是整块变黑（v2.0.1 之前就是这样被一个
+        /// 非法路径字符搞成黑板的）。同一个错误只记一次日志。
+        /// </summary>
+        private static void Guard(string where, Action draw)
+        {
+            try
+            {
+                draw();
+            }
+            catch (Exception e)
+            {
+                string key = where + "|" + e.Message;
+                if (_lastGuiError != key)
+                {
+                    _lastGuiError = key;
+                    KKPEHeightLockPlugin.Log.LogError("[界面] " + where + "绘制失败：" + e);
+                }
+                GUILayout.Label(L10n.T("这里的绘制出错了，看日志") + "：" + e.Message, _labelSm);
+            }
+        }
+
+        private static string _lastGuiError;
 
         private static void DrawBottomBar()
         {
@@ -125,9 +151,9 @@ namespace KKPEHeightLock
             float fieldX = x + 76f;
             float fieldW = Mathf.Max(80f, right - AccentW - DefW - 8f - fieldX);
 
-            string dir = KKPEHeightLockPlugin.ExportOutputDir.Value ?? "";
+            string dir = PathFix.Read(KKPEHeightLockPlugin.ExportOutputDir.Value);
             string nd = GUI.TextField(new Rect(fieldX, y, fieldW, RowH), dir, _field);
-            if (nd != dir) KKPEHeightLockPlugin.ExportOutputDir.Value = nd;
+            if (nd != dir) KKPEHeightLockPlugin.ExportOutputDir.Value = PathFix.ToConfig(nd);
 
             if (GUI.Button(new Rect(right - AccentW - DefW - 4f, y, DefW, RowH), L10n.T("默认"), _btn))
                 KKPEHeightLockPlugin.ExportOutputDir.Value = "";
@@ -140,9 +166,10 @@ namespace KKPEHeightLock
                 StartExport();
             GUI.enabled = old;
 
-            string hint = string.IsNullOrEmpty(KKPEHeightLockPlugin.ExportOutputDir.Value)
+            string outDir = PathFix.Read(KKPEHeightLockPlugin.ExportOutputDir.Value);
+            string hint = string.IsNullOrEmpty(outDir)
                 ? L10n.T("留空 = UserData/VideoExport/AutoExport")
-                : KKPEHeightLockPlugin.ExportOutputDir.Value;
+                : outDir;
             if (!veReady) hint = L10n.T("未找到 VideoExport，导出不可用");
             GUI.Label(new Rect(x, y + RowH + 3f, w, 20f), hint, _labelSm);
         }
@@ -200,7 +227,7 @@ namespace KKPEHeightLock
             var o = new ExportOptions();
             for (int i = 0; i < paths.Count; i++) o.Scenes.Add(paths[i]);
 
-            o.FemaleCard = KKPEHeightLockPlugin.ExportFemaleCard.Value ?? "";
+            o.FemaleCard = PathFix.Read(KKPEHeightLockPlugin.ExportFemaleCard.Value);
             o.ReplaceFemale = KKPEHeightLockPlugin.ExportReplaceFemale.Value;
             o.ShapeFromScene = KKPEHeightLockPlugin.ExportShapeFromScene.Value;
             o.BustFromScene = KKPEHeightLockPlugin.ExportBustFromScene.Value;
@@ -215,15 +242,14 @@ namespace KKPEHeightLock
             o.Fps = Mathf.Clamp(KKPEHeightLockPlugin.ExportFps.Value, 1, 240);
             o.ResizeWidth = Mathf.Max(0, KKPEHeightLockPlugin.ExportResizeWidth.Value);
             o.ResizeHeight = Mathf.Max(0, KKPEHeightLockPlugin.ExportResizeHeight.Value);
-            o.Vignette = KKPEHeightLockPlugin.ExportVignette.Value;
-            o.Bloom = KKPEHeightLockPlugin.ExportBloom.Value;
-            o.OutputDir = ResolveDir(KKPEHeightLockPlugin.ExportOutputDir.Value);
+            o.OutputDir = ResolveDir(PathFix.Read(KKPEHeightLockPlugin.ExportOutputDir.Value));
             o.Merge = KKPEHeightLockPlugin.ExportMerge.Value;
             o.KeepSegments = KKPEHeightLockPlugin.ExportKeepSegments.Value;
             o.UncapFps = KKPEHeightLockPlugin.ExportUncapFps.Value;
 
             // 后期只剩 ReShade 一条路：泛光/暗角在 present 之后加，
             // 只有 KKReshade 的共享内存通路能抓到（代价是用不了零拷贝）。
+            // 强度不在这里传：ReShade 面板里是什么就是什么，插件不碰预设。
             o.RealtimeFx = true;
             o.ScreenshotPluginIndex = 2;
 

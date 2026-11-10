@@ -23,7 +23,7 @@ namespace KKPEHeightLock
     {
         public const string GUID = "com.kkpeheightlock";
         public const string PluginName = "Scene Card Fitting Toolkit";
-        public const string Version = "2.0.0";
+        public const string Version = "2.1.0";
 
         internal static ManualLogSource Log;
         internal static KKPEHeightLockPlugin Instance;
@@ -78,8 +78,6 @@ namespace KKPEHeightLock
         internal static ConfigEntry<string> ExportClothesParts;
         internal static ConfigEntry<int> ExportResizeWidth;
         internal static ConfigEntry<int> ExportResizeHeight;
-        internal static ConfigEntry<FxLevel> ExportVignette;
-        internal static ConfigEntry<FxLevel> ExportBloom;
         internal static ConfigEntry<bool> ExportMerge;
         internal static ConfigEntry<bool> ExportKeepSegments;
         internal static ConfigEntry<bool> ExportUncapFps;
@@ -189,12 +187,9 @@ namespace KKPEHeightLock
                 "输出宽度（0 = 用游戏当前窗口尺寸；要和高度一起填）。");
             ExportResizeHeight = Config.Bind("AutoExport", "ResizeHeight", 0,
                 "输出高度（0 = 用游戏当前窗口尺寸）。");
-            ExportVignette = Config.Bind("AutoExport", "Vignette", FxLevel.Strong,
-                "暗角强度（ReShade 实时做）。界面上已经不给开关了，要调就改这里或直接改"
-                + " KK_BloomVignette.ini，然后重启游戏才生效。");
-            ExportBloom = Config.Bind("AutoExport", "Bloom", FxLevel.Medium,
-                "泛光强度（ReShade 实时做）。界面上已经不给开关了，要调就改这里或直接改"
-                + " KK_BloomVignette.ini，然后重启游戏才生效。");
+            // 泛光/暗角强度**不再由插件配置**：以前这里的 Vignette/Bloom 两个档位会在
+            // 每次导出时写进 ReShade 预设，把手调的值冲掉，已整体删除。
+            // 要用什么强度，就在 ReShade 面板（Home）里调，插件只读不写。
                                     ExportMerge = Config.Bind("AutoExport", "Merge", true,
                 "全部录完后把各段合并成一个 mp4。");
             ExportKeepSegments = Config.Bind("AutoExport", "KeepSegments", true,
@@ -206,6 +201,14 @@ namespace KKPEHeightLock
                 "逐帧录制时关掉垂直同步、放开帧率上限，让引擎尽快出帧。"
                 + "关掉就按显示器刷新率走（更稳但更慢）。");
 
+            // 路径类配置自愈：BepInEx 读 cfg 时会把 \a \b \f \n \r \t \v 当转义序列，
+            // 于是 ...\female\animfriend.png 读回来是 "female"+BEL+"nimfriend.png"，
+            // 面板直接黑掉（Path.GetFileName 抛非法字符）、卡也加载不出来。
+            // 这里把旧值就地修好，并统一写成 /，以后读回来就不会再被转义。
+            MigratePath("FemaleCard", ExportFemaleCard);
+            MigratePath("OutputDir", ExportOutputDir);
+            MigratePath("SceneDir", ExportSceneDir);
+
 
             // 逐个类打补丁：某个目标方法在这个版本里不存在（KK/KKS 的 PE 版本差异）
             // 只让那一组失效，不要把整个插件的补丁都带崩。
@@ -214,6 +217,23 @@ namespace KKPEHeightLock
             TryPatch(harmony, typeof(BodyPreservePatches), "换人保留体型");
 
             Logger.LogInfo($"{PluginName} v{Version} loaded, bone: {BoneName.Value}, mode: {LockMode.Value}, enabled: {Enabled.Value}");
+        }
+
+        /// <summary>路径类配置自愈：把被 cfg 转义破坏的路径修好，并统一存成 /。</summary>
+        private static void MigratePath(string name, ConfigEntry<string> entry)
+        {
+            try
+            {
+                string old = entry.Value ?? "";
+                string fix = PathFix.ToConfig(old);
+                if (string.Equals(fix, old, StringComparison.Ordinal)) return;
+                entry.Value = fix;
+                Log.LogInfo("[路径修复] " + name + " 里有被转义吃掉的字符，已还原为：" + fix);
+            }
+            catch (Exception e)
+            {
+                Log.LogWarning("[路径修复] " + name + " 失败：" + e.Message);
+            }
         }
 
         /// <summary>单独给一个补丁类打补丁，失败只影响这一组功能。</summary>

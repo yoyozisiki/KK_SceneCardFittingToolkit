@@ -59,6 +59,13 @@ A：导出时会自动藏掉纯 UI 组件（Canvas / 纯 IMGUI）。但界面和
 **Q：一张卡里有好几段 Timeline，能都录吗？**
 A：不能。插件里只维护一份 Timeline 状态，一个场景卡录一条。
 
+**Q：想改泛光 / 暗角的强度？**
+A：按 `Home` 打开 ReShade 面板直接拖滑块，`[OVERLAY] AutoSavePreset=1` 会自动存回预设。
+本插件对 ReShade **只读不写** —— 导出时既不会覆盖你的参数，也不会替你开关效果；
+日志里会打印当前参数和 technique 是否勾选，方便对片。
+如果你把 `AutoSavePreset` 关了，改完记得在 ReShade 面板里按一下保存，否则导出时
+ReShade 重建渲染环境会按文件里的旧值来。
+
 **Q：想改配置文件？**
 A：`BepInEx/config/com.kkpeheightlock.cfg`，每一项都有注释。界面能调的都建议在界面调。
 

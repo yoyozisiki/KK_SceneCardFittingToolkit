@@ -190,7 +190,7 @@ namespace KKPEHeightLock
         /// </summary>
         private static IEnumerator WaitStudioReady()
         {
-            float ceiling = 60f;
+            float ceiling = 15f;
             try { ceiling = Mathf.Max(5f, KKPEHeightLockPlugin.ExportStartupDelay.Value); }
             catch (Exception) { }
 
@@ -209,7 +209,10 @@ namespace KKPEHeightLock
                 }
                 catch (Exception) { hasStudio = false; }
 
-                if (hasStudio && _sceneLoadCount > 0) break;
+                // 只要 Studio 实例和主相机都在就直接开跑。
+                // 不再要求「KKAPI 的 SceneLoad 触发过」——那个事件只在导出流程里才订阅，
+                // 长时间开着的 Studio 永远收不到，结果每次都干等满上限（实测 60 秒）。
+                if (hasStudio) break;
 
                 if (Time.realtimeSinceStartup - t0 >= ceiling)
                 {
@@ -285,7 +288,8 @@ namespace KKPEHeightLock
                 + $"，头尾各 {o.FadeSeconds:0.##}s 淡入淡出（直出）"
                 + $"，去码={Yn(o.Decensor)}，去球={Yn(o.RemoveSpheres)}，替换 female={Yn(o.ReplaceFemale)}");
             Log($"后期：{DescribeFx(o)}");
-            SyncReshadePreset(o);
+            // 只读检查，绝不写 ReShade 预设：泛光/暗角强度归用户在 ReShade 面板里调。
+            if (o.RealtimeFx) CheckReshadePreset();
 
             float t0 = Time.realtimeSinceStartup;
 

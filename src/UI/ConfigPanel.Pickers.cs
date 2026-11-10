@@ -303,7 +303,7 @@ public static partial class ConfigPanel
                                     GUILayout.Width(thumbWidth), GUILayout.Height(26)))
                             {
                                 if (_cardPickTarget == 1)
-                                    KKPEHeightLockPlugin.ExportFemaleCard.Value = entry.path;
+                                    KKPEHeightLockPlugin.ExportFemaleCard.Value = PathFix.ToConfig(entry.path);
                                 else if (_cardPickerIsFemale)
                                     KKPEHeightLockPlugin.FemaleCardPath.Value = entry.path;
                                 else

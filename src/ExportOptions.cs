@@ -5,15 +5,6 @@ using UnityEngine;
 
 namespace KKPEHeightLock
 {
-    /// <summary>后期效果强度（对应 python_tools/6_视频后期 的档位表）。</summary>
-    public enum FxLevel
-    {
-        Off = 0,
-        Weak = 1,
-        Medium = 2,
-        Strong = 3
-    }
-
     /// <summary>
     /// 批量导出的一组参数。等价于 autoexport/recorder.py 里的 ExportOptions，
     /// 只是从「外部脚本 + 热键模拟」变成了「游戏内直接调 API」。
@@ -68,8 +59,9 @@ namespace KKPEHeightLock
         /// </summary>
         public int[] ClothesParts;
 
-        public FxLevel Vignette = FxLevel.Off;
-        public FxLevel Bloom = FxLevel.Off;
+        // 泛光 / 暗角的强度**不在本插件里配**：参数归 ReShade 面板（Home 键），
+        // 插件只负责保证录制时那条 ReShade 通路开着，绝不改写预设文件。
+        // （原 Vignette / Bloom 两个档位字段 + FxLevel 枚举已删除，见 docs/DEVELOPMENT.md）
 
         /// <summary>
         /// 效果在哪做。

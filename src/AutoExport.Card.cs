@@ -104,17 +104,21 @@ namespace KKPEHeightLock
                 ScenePlayerModule.TimelinePause();
                 HoldTimeline = true;
 
-                float settleSec = 3f;
-                try { settleSec = Mathf.Max(0f, KKPEHeightLockPlugin.ExportReplaceSettle.Value); }
-                catch (Exception) { }
-                if (settleSec > 0f)
-                {
-                    SetPhase("等物理稳定 " + settleSec.ToString("0.#") + "s…");
-                    yield return new WaitForSeconds(settleSec);
-                }
-                Log($"[时序] 换人+换装完成 → 应用姿态 → 等 {settleSec:0.#}s"
+                Log($"[时序] 换人+换装完成 → 应用姿态"
                     + $"（时间轴 {ScenePlayerModule.TimelineTime:0.###}s，"
                     + $"播放中={Yn(ScenePlayerModule.TimelinePlaying)}）");
+            }
+
+            // ---- 2-d) 关掉场景里独立动态骨骼碰撞体对 female 的吸附
+            // 换完人之后新角色的衣服/头发是全新的动态骨骼，场景里那些
+            // [J694] Dynamic Bone Collider 会继续抓着它们（手动要在 KKPE 高级模式里
+            // 一个个取消 on）。这里统一关掉，成片里衣服/头发就不会被吸住。
+            if (didReplace)
+            {
+                SetPhase("关闭动态骨骼碰撞体吸附…");
+                try { TurnOffDynamicBoneColliders(); }
+                catch (Exception e) { Log("[提示] 关闭碰撞体吸附出错：" + e.Message); }
+                yield return null;
             }
 
             // ---- 3) 去码 / 去球
@@ -131,6 +135,23 @@ namespace KKPEHeightLock
                 try { SceneTools.DecensorScene(); }
                 catch (Exception e) { Log("去码失败：" + e.Message); }
                 yield return null;
+            }
+
+            // ---- 3-b) 等物理稳定（放在所有准备工作之后、开录之前）
+            // 换人 / 换装 / 关碰撞体 / 去码 每一项都会重建网格或改骨骼，任何一项排在
+            // 等待之后，这段等待就白等了（这就是以前"中途等 3 秒"的问题）。
+            // 所以统一收到这里：全部改完 → 让动态骨骼（头发/裙子/胸）静下来 → 开录。
+            if (didReplace)
+            {
+                float settleSec = 3f;
+                try { settleSec = Mathf.Max(0f, KKPEHeightLockPlugin.ExportReplaceSettle.Value); }
+                catch (Exception) { }
+                if (settleSec > 0f)
+                {
+                    SetPhase("等物理稳定 " + settleSec.ToString("0.#") + "s…");
+                    yield return new WaitForSeconds(settleSec);
+                }
+                Log($"[时序] 全部准备完成（换人/换装/碰撞体/去码）→ 等物理稳定 {settleSec:0.#}s → 开录");
             }
 
             // ---- 4) 算时长
@@ -292,28 +313,50 @@ namespace KKPEHeightLock
                 yield return new WaitForSeconds(0.2f);
             }
 
-            if (string.IsNullOrEmpty(raw) || !File.Exists(raw))
-            {
-                Log("[失败] 没找到 VideoExport 的输出文件");
-                yield break;
-            }
-
-            // ---- 7-b) 定稿确认
-            // 上面的循环判定「编码完了」之后，ffmpeg 可能紧接着做 faststart 的收尾重写：
-            // 把文件截断、重新排一遍让 moov 挪到头部。这一瞬间文件会变成 0 字节，
-            // 如果此时把路径交给后期 ffmpeg，就会读到空文件。
-            // 所以再确认一次：连续 4 次（0.8 秒）都满足「结构完整 + 大小不变」才算定稿。
+            // ---- 7-b) 定稿确认（并且重新锁定文件）
+            // 注意：VideoExport 混流成功后会把「原始文件」删掉，只留 final_<时间>.mp4
+            // （autoMuxAudioVideo + deleteSourceFilesAfterMux）。所以这里每轮都要重新找
+            // 当前最新的 mp4，不能抱着旧路径 —— 否则会一直盯着一个已经被删掉的文件，
+            // 20 秒后判成「0 字节、没定稿」，整个片段就丢了。
             float settleEnd = Time.realtimeSinceStartup + 20f;
             long settleLast = -1;
             int settleOk = 0;
             while (Time.realtimeSinceStartup < settleEnd)
             {
-                long sz = FileSize(raw);
-                bool ok = sz > 0 && IsMp4Finalized(raw) && sz == settleLast;
-                settleOk = ok ? settleOk + 1 : 0;
-                settleLast = sz;
-                if (settleOk >= 4) break;
+                var cur = VeCtl.FindOutput(segDir, before);
+                if (!string.IsNullOrEmpty(cur) && File.Exists(cur))
+                {
+                    long sz = FileSize(cur);
+                    bool ok = sz > 0 && IsMp4Finalized(cur) && sz == settleLast;
+                    settleOk = ok ? settleOk + 1 : 0;
+                    settleLast = sz;
+                    raw = cur;
+                    if (settleOk >= 4) break;
+                }
+                else
+                {
+                    settleOk = 0;
+                    settleLast = -1;
+                }
                 yield return new WaitForSeconds(0.2f);
+            }
+
+            // 最后再锁一次：混流刚完成的一瞬间，文件名会从 <时间>.mp4 变成 final_<时间>.mp4
+            var latest = VeCtl.FindOutput(segDir, before);
+            if (!string.IsNullOrEmpty(latest) && File.Exists(latest) && FileSize(latest) > 0
+                && !string.Equals(latest, raw, StringComparison.OrdinalIgnoreCase))
+            {
+                Log("已锁定混流后的文件：" + Path.GetFileName(latest)
+                    + (string.IsNullOrEmpty(raw) ? "" : "（原 " + Path.GetFileName(raw) + " 已不在）"));
+                raw = latest;
+            }
+            else if (!string.IsNullOrEmpty(latest) && File.Exists(latest) && FileSize(latest) > 0)
+                raw = latest;
+
+            if (string.IsNullOrEmpty(raw) || !File.Exists(raw))
+            {
+                Log("[失败] 没找到 VideoExport 的输出文件");
+                yield break;
             }
 
             long rawLen = FileSize(raw);

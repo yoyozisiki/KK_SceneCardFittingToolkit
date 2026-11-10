@@ -54,7 +54,7 @@ namespace KKPEHeightLock
             try
             {
                 // SceneDir 支持多个根目录，用 ; 分隔
-                string raw = KKPEHeightLockPlugin.ExportSceneDir.Value ?? "";
+                string raw = PathFix.Read(KKPEHeightLockPlugin.ExportSceneDir.Value);
                 var cand = new List<string>();
                 foreach (var part in raw.Split(';'))
                 {

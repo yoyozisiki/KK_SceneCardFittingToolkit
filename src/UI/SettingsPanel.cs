@@ -31,21 +31,26 @@ namespace KKPEHeightLock
         private static Vector2 _setScroll;
         private static Texture2D _previewTex;
         private static string _previewPath;
+        private static float _cardH;    // 角色卡区高度
 
         private static void DrawRightColumn(float bodyH)
         {
             // ---- 角色卡
             GUILayout.BeginVertical(_panel);
             GUILayout.Label(L10n.T("替换女性角色卡"), _section);
+            Rect lblRect = GUILayoutUtility.GetLastRect();
             GUILayout.Space(4);
             GUILayout.BeginHorizontal();
             DrawCardPreview();
             GUILayout.Space(8);
             GUILayout.BeginVertical();
 
-            string card = KKPEHeightLockPlugin.ExportFemaleCard.Value;
+            // 走 PathFix：cfg 里的 `\a` 会被 BepInEx 当成 BEL 读回来，
+            // 直接喂给 Path.GetFileNameWithoutExtension 会抛 Illegal characters in path，
+            // 整个面板就黑掉（v2.0.2 修复）。
+            string card = PathFix.Read(KKPEHeightLockPlugin.ExportFemaleCard.Value);
             GUILayout.Label(string.IsNullOrEmpty(card) ? L10n.T("(未选择)")
-                : Path.GetFileNameWithoutExtension(card), _labelBold);
+                : SafeFileName(card), _labelBold);
             GUILayout.Label(string.IsNullOrEmpty(card) ? L10n.T("未选角色卡") : ShortPath(card),
                 _labelSm);
             GUILayout.Space(6);
@@ -64,15 +69,29 @@ namespace KKPEHeightLock
             KKPEHeightLockPlugin.ExportReplaceFemale.Value = GUILayout.Toggle(
                 KKPEHeightLockPlugin.ExportReplaceFemale.Value,
                 L10n.T("  替换所有 female（保留 male）"), _toggle, GUILayout.Height(28));
+            Rect togRect = GUILayoutUtility.GetLastRect();
             GUILayout.EndVertical();
+            // 角色卡区高度 = 从标题顶部到 toggle 底边 + 面板上下内边距 8 + 与下面的 8 间隙
+            if (lblRect.height > 1f && togRect.height > 1f && togRect.yMax > lblRect.y)
+                _cardH = togRect.yMax - lblRect.y + 16f;
 
             GUILayout.Space(8);
 
-            // ---- 导出设置
+            // ---- 导出设置（不再单独占一行标题，直接是设置项滚动区）
             GUILayout.BeginVertical(_panel, GUILayout.ExpandHeight(true));
-            GUILayout.Label(L10n.T("导出设置"), _section);
-            GUILayout.Space(4);
 
+            // 滚动区高度 = 右栏总高 - 角色卡区实际高度 - 间隙。
+            // 以前写死 `bodyH-244`：角色卡区一变高（换行 / 缩放 / 多语言 / 预览图）
+            // 就算不准，滚动视口伸到底栏下面 —— 最后那行（合并 / 保留分段）
+            // 永远被底栏盖住。现在量角色卡区的真实高度，不猜；首帧没量到就先用经验值。
+            float cardH = _cardH > 60f ? _cardH : 200f;
+            float setH = Mathf.Max(160f, bodyH - cardH - 12f);
+
+            _setScroll = GUILayout.BeginScrollView(_setScroll, false, true,
+                GUIStyle.none, GUI.skin.verticalScrollbar, GUIStyle.none,
+                GUILayout.Height(setH));
+
+            // 语言也跟着滚：以前它钉在滚动区外面，列表一长就它不跟着走
             GUILayout.BeginHorizontal();
             GUILayout.Label(L10n.T("语言"), _label, GUILayout.Width(72));
             Dropdown("lang", 150f, L10n.LanguageNames,
@@ -80,11 +99,6 @@ namespace KKPEHeightLock
                             L10n.LanguageNames.Length - 1),
                 delegate(int i) { KKPEHeightLockPlugin.UiLanguage.Value = (UiLang)i; });
             GUILayout.EndHorizontal();
-
-            float setH = Mathf.Max(160f, bodyH - 244f);
-            _setScroll = GUILayout.BeginScrollView(_setScroll, false, true,
-                GUIStyle.none, GUI.skin.verticalScrollbar, GUIStyle.none,
-                GUILayout.Height(setH));
 
             GUILayout.BeginHorizontal();
             GUILayout.Label(L10n.T("输出尺寸"), _label, GUILayout.Width(72));
@@ -99,8 +113,6 @@ namespace KKPEHeightLock
             IntField(KKPEHeightLockPlugin.ExportFps, 62);
             GUILayout.Label("fps", _labelSm, GUILayout.Width(28));
             GUILayout.EndHorizontal();
-
-            HLine();
 
             GUILayout.BeginHorizontal();
             GUILayout.Label(L10n.T("时长"), _label, GUILayout.Width(46));
@@ -165,13 +177,6 @@ namespace KKPEHeightLock
                 GUILayout.Width(160), GUILayout.Height(28));
             GUILayout.EndHorizontal();
 
-            HLine();
-
-            GUILayout.Label(L10n.T("后期：ReShade 实时（泛光 + 暗角）"), _labelSm);
-            GUILayout.Label(L10n.T("强度改 KK_BloomVignette.ini，重启生效"), _labelSm);
-
-            HLine();
-
             GUILayout.BeginHorizontal();
             KKPEHeightLockPlugin.ExportMerge.Value = GUILayout.Toggle(
                 KKPEHeightLockPlugin.ExportMerge.Value, L10n.T("  合并成一个视频"), _toggle,
@@ -182,7 +187,28 @@ namespace KKPEHeightLock
             GUILayout.EndHorizontal();
 
             GUILayout.EndScrollView();
+
+            // 滚轮自己处理：这个游戏里 IMGUI 收不到 ScrollWheel（被 Studio 的相机缩放吃掉），
+            // 滚动条只能拖、滚轮滚不动。这里直接读输入，在滚动区内滚。
+            ScrollWheel(setH, cardH);
+
             GUILayout.EndVertical();
+        }
+
+        /// <summary>鼠标在设置区里时，用滚轮滚动设置列表。</summary>
+        private static void ScrollWheel(float viewH, float cardH)
+        {
+            if (!_visible) return;
+            var e = Event.current;
+            if (e == null) return;
+
+            // 右栏 x 起点：左边距 8 + 左栏宽 (rect.width-588) + 间隙 10
+            float colX = 8f + (_rect.width - 588f) + 10f;
+            float top = 8f + cardH + 8f;
+            if (!new Rect(colX, top, 556f, viewH).Contains(e.mousePosition)) return;
+            float dy = Input.mouseScrollDelta.y;
+            if (Mathf.Abs(dy) < 0.01f) return;
+            _setScroll.y = Mathf.Max(0f, _setScroll.y - dy * 40f);
         }
 
         /// <summary>9 个部件一行两个下拉，选项按部位给。</summary>
@@ -220,10 +246,21 @@ namespace KKPEHeightLock
             if (col != 0) GUILayout.EndHorizontal();
         }
 
+        /// <summary>
+        /// 取文件名做显示。路径里有非法字符时 Path.GetFileNameWithoutExtension 会抛异常，
+        /// 而这里在 OnGUI 里 —— 一抛就是整块面板变黑，所以必须兜住。
+        /// </summary>
+        private static string SafeFileName(string p)
+        {
+            if (string.IsNullOrEmpty(p)) return "";
+            try { return Path.GetFileNameWithoutExtension(p); }
+            catch (Exception) { return p; }
+        }
+
         private static void DrawCardPreview()
         {
             const int S = 100;
-            string card = KKPEHeightLockPlugin.ExportFemaleCard.Value;
+            string card = PathFix.Read(KKPEHeightLockPlugin.ExportFemaleCard.Value);
             if (!string.IsNullOrEmpty(card) && card != _previewPath)
             {
                 if (_previewTex != null) { UnityEngine.Object.Destroy(_previewTex); _previewTex = null; }

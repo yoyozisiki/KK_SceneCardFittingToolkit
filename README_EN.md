@@ -69,6 +69,11 @@ A: The exporter automatically hides UI-only components, including Canvas and pur
 
 A: No. The plugin maintains only one Timeline state at a time. Each scene card produces one video clip.
 
+**Q: How do I change the bloom / vignette strength?**
+
+A: Press `Home` to open the ReShade overlay and drag the sliders; `[OVERLAY] AutoSavePreset=1` writes them back to the preset automatically.
+This plugin is read-only towards ReShade: exporting never overwrites your values and never toggles the effect for you. The export log prints the current values and whether the technique is enabled.
+
 **Q: Where can I edit the configuration file?**
 
 A: The configuration file is located at:
