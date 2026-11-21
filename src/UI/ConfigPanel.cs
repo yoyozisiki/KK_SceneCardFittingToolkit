@@ -35,18 +35,12 @@ namespace KKPEHeightLock
         private static string _subdirPickerPath = ""; // 当前浏览的路径
         private static System.Collections.Generic.List<string> _subdirList = new System.Collections.Generic.List<string>();
 
-        // 游戏内选卡窗口状态
+        // 游戏内选卡窗口状态（绘制在 CardPickerWindow.cs，数据来自后端的 CardLibrary）
         private static bool _cardPickerVisible;
         private static bool _cardPickerIsFemale;
-        /// <summary>选卡结果写给谁：0 = 场景替换的配置，1 = 批量导出的角色卡。</summary>
+        /// <summary>选卡结果写给谁：0 = 场景替换的配置，1 = 导出主卡，2 = 导出次卡（多选）。</summary>
         private static int _cardPickTarget;
-        private static Rect _cardPickerRect = new Rect(150, 80, 640, 500);
-        private static Vector2 _cardScroll;
-        private static string _cardSearch = "";
-        private static string _cardPickerCurrentDir = ""; // 相对目录,"" = 根目录
-        private static System.Collections.Generic.List<CardEntry> _cardEntries;
-        private static System.Collections.Generic.List<string> _cardSubFolders;
-        private static int _cardsProcessedThisFrame;
+        private static Rect _cardPickerRect = new Rect(140, 60, 900, 660);
 
         // 配置窗口背景图(外置文件,可替换)
         private static Texture2D _windowBackground;
@@ -55,14 +49,6 @@ namespace KKPEHeightLock
         private static bool _draggingWindow;
         private static Vector2 _dragStartMouse;
         private static Vector2 _dragStartWinPos;
-
-        private class CardEntry
-        {
-            public string path;
-            public string name;     // 角色名(懒加载,初始为 null)
-            public Texture2D texture; // 缩略图(懒加载)
-            public bool metaLoaded; // 角色名是否已加载
-        }
 
         public static void Init(BaseUnityPlugin plugin)
         {
@@ -116,6 +102,8 @@ namespace KKPEHeightLock
 
         public static void Dispose()
         {
+            try { AutoExportPanel.SaveViewState(); } catch (Exception) { }
+            UiClickBlock.Dispose();
             if (_toolbarButton != null)
             {
                 try { _toolbarButton.Dispose(); } catch { }

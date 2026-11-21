@@ -1,0 +1,6 @@
+# 二进制不进仓库（约 120MB），只保留说明文件。
+# 要发版请把整个 output 目录打 zip 传到 GitHub Releases。
+*
+!.gitignore
+!README.md
+!安装说明.txt

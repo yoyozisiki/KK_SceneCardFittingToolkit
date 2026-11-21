@@ -13,13 +13,14 @@ Automatically batch-load scene cards, replace characters and outfits, apply post
 | Feature | Description |
 |---|---|
 | **Batch Video Export** | Select any number of scene cards and automatically export them as MP4 videos. Optionally merge all clips into a single video. |
-| **Character Replacement** | Replace all female characters in a scene with a specified character card. Body shape, breast size, skeleton, and height can independently inherit settings from either the original scene or the replacement character card. |
-| **Outfit Customization** | Apply outfit presets before exporting. Each clothing component can be configured as **Worn / Partially Removed / Removed**. |
+| **Character Replacement** | A **main card** replaces the first female only; the remaining females are replaced from a **secondary card list** (multi-select or a whole folder, by number or random). Body shape, breast size, skeleton, and height can independently inherit settings from either the original scene or the replacement character card. |
+| **Outfit Customization** | Apply outfit presets before exporting, including **Random** (picks one of the outfits the card actually owns). Each clothing component can be configured as **Worn / Partially Removed / Removed**. |
 | **Timeline-based Duration** | Automatically use the Timeline duration when available. If no Timeline exists or its duration is too short, the configured minimum duration is used, with playback looping as necessary. |
 | **Fade In / Fade Out** | Record additional footage and overlay black-screen transitions at the beginning and end of each clip. |
+| **Pause While Exporting** | Press **ESC** to pause / resume; finished clips are kept. |
 | **Mosaic / Auxiliary Object Removal** | Automatically remove mosaic materials and hide auxiliary lighting and shadow spheres. |
 | **Real-time ReShade Effects** | Apply bloom and vignette effects in real time on the GPU through ReShade. |
-| **Scene Card Browser** | Browse scenes directly from the main panel. Supports next/previous scene, random scene selection, and random character replacement. |
+| **Scene Card Browser** | Browse scenes directly from the main panel. Folder expansion state and scroll position are remembered. Supports next/previous scene, random scene selection, and random character replacement. |
 
 ---
 

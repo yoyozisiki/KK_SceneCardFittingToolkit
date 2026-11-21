@@ -25,6 +25,17 @@ namespace KKPEHeightLock
         public static bool Running { get; private set; }
         public static bool CancelRequested { get; private set; }
 
+        /// <summary>
+        /// 暂停中（ESC 切换）。暂停时整条流水线停在原地等，随时可以继续：
+        ///   · 正在录的那张卡会被**放弃重录** —— ffmpeg 的管道已经开了，
+        ///     半截视频接不回去，硬接着录只会得到前面冻住的一段；
+        ///   · 已经录完的片段全都留着，继续后从这张卡重新开始。
+        /// </summary>
+        public static bool Paused { get; private set; }
+
+        /// <summary>本轮录制是被「暂停」打断的（区别于出错/用户停止）。</summary>
+        private static bool _pauseInterrupt;
+
         private static bool _suppressGui;
 
         /// <summary>
@@ -32,8 +43,41 @@ namespace KKPEHeightLock
         /// 走 ReShade 实时效果时必须藏：Reshade 截图抓的是 present 之后的**最终画面**，
         /// IMGUI 会原封不动被录进视频（实测日志窗口糊满左上角一大片）。
         /// 走 Screencap 时抓的是相机 RenderTexture，不含 UI，所以不用藏、进度条可以正常看。
+        ///
+        /// 暂停时例外：这时候没在录，界面必须露出来，否则连「停止」都点不到。
         /// </summary>
-        public static bool SuppressGui { get { return Running && _suppressGui; } }
+        public static bool SuppressGui { get { return Running && _suppressGui && !Paused; } }
+
+        /// <summary>ESC：导出中暂停 / 继续。由插件的 Update 每帧调用。</summary>
+        internal static void TickPauseKey()
+        {
+            if (!Running) return;
+            try
+            {
+                if (Input.GetKeyDown(KeyCode.Escape)) TogglePause();
+            }
+            catch (Exception) { }
+        }
+
+        public static void TogglePause()
+        {
+            if (!Running) return;
+            Paused = !Paused;
+            if (Paused)
+            {
+                // 黑场先撤掉：暂停时用户要看画面
+                ApplyFade(0f);
+                // 正在录就把这张卡标记成「半成品」，CaptureFrames 见到标记会收尾
+                if (VeCtl.IsRecording) _pauseInterrupt = true;
+                SetPhase("已暂停：按 ESC 继续");
+                Log("==== 已暂停：按 ESC 继续（正在录的这张卡会重录）====");
+            }
+            else
+            {
+                SetPhase("继续…");
+                Log("==== 继续导出 ====");
+            }
+        }
 
         /// <summary>实时淡入淡出的黑场不透明度：0 = 不遮，1 = 全黑。</summary>
         public static float FadeBlack { get; private set; }
@@ -249,6 +293,8 @@ namespace KKPEHeightLock
                 return false;
             }
             CancelRequested = false;
+            Paused = false;
+            _pauseInterrupt = false;
             Running = true;
             _suppressGui = opts.RealtimeFx;
             // 走 ReShade 通路时截的是最终画面，必须先把整屏清干净
@@ -268,7 +314,8 @@ namespace KKPEHeightLock
         {
             if (!Running) return;
             CancelRequested = true;
-            Log("已请求停止：当前这张卡录完就停");
+            Log(Paused ? "已请求停止：从暂停里直接退出（已录好的片段会保留并合并）"
+                       : "已请求停止：当前这张卡录完就停");
         }
 
         // ============================================================ 主流程
@@ -300,17 +347,30 @@ namespace KKPEHeightLock
             IEnumerator warm = WaitStudioReady();
             while (warm.MoveNext()) yield return warm.Current;
 
-            for (int i = 0; i < o.Scenes.Count; i++)
+            // 注意这里用 while 而不是 for：被暂停打断的那张卡要**原地重录**，
+            // 所以下标不能自增（见下面 _pauseInterrupt 分支）。
+            for (int i = 0; i < o.Scenes.Count; )
             {
                 if (CancelRequested) break;
+
+                // 暂停：停在两张卡之间等 ESC。这里没在录，等多久都不会丢画面。
+                while (Paused && !CancelRequested)
+                {
+                    SetPhase("已暂停：按 ESC 继续");
+                    yield return null;
+                }
+                if (CancelRequested) break;
+
                 CurrentIndex = i + 1;
                 string scene = o.Scenes[i];
                 CurrentSceneName = Path.GetFileNameWithoutExtension(scene);
                 Progress = (float)i / o.Scenes.Count;
                 Log($"---- [{i + 1}/{o.Scenes.Count}] {CurrentSceneName} ----");
 
+                _pauseInterrupt = false;
+                int attempt = 0;
                 string outPath = null;
-                IEnumerator one = ExportOne(o, scene, segRoot, i + 1,
+                IEnumerator one = ExportOne(o, scene, segRoot, i + 1, attempt,
                     delegate(string p) { outPath = p; });
                 while (true)
                 {
@@ -332,6 +392,19 @@ namespace KKPEHeightLock
                     else yield return cur;
                 }
 
+                // 被暂停打断：这张卡只录了半截，管道已经关了接不回去。
+                // 下次重录换一个新目录（见 ExportOne 的 attempt），这里**不删**旧目录 ——
+                // VideoExport 收尾时还要用，删了它会报 DirectoryNotFound、混流也拿不到文件。
+                if (_pauseInterrupt)
+                {
+                    _pauseInterrupt = false;
+                    attempt++;
+                    Log("[暂停] 这张卡没录完，继续后用新目录重录（第 " + (attempt + 1) + " 次尝试）");
+                    HoldTimeline = false;
+                    CurrentIndex = i + 1;
+                    continue;
+                }
+
                 if (!string.IsNullOrEmpty(outPath))
                 {
                     Segments.Add(outPath);
@@ -346,6 +419,7 @@ namespace KKPEHeightLock
                 // 兜底：ExportOne 中途出错/提前 yield break 时 hold 可能还开着，
                 // 时间轴会一直冻着（用户回 Studio 手动播放也没反应）。
                 HoldTimeline = false;
+                i++;
             }
 
             // 收尾：合并
@@ -418,6 +492,8 @@ namespace KKPEHeightLock
         {
             Running = false;
             CancelRequested = false;
+            Paused = false;
+            _pauseInterrupt = false;
             _suppressGui = false;
             ApplyFade(0f);             // 别把黑场留在画面上
             ExitCinemaMode();          // 把静音的 GUI / Canvas / 窗口全部还原
@@ -425,6 +501,18 @@ namespace KKPEHeightLock
         }
 
         private static string Yn(bool b) { return b ? "开" : "关"; }
+
+        /// <summary>
+        /// 取文件名做日志。不能用裸的 Path.GetFileName：cfg 里的路径可能带着被转义
+        /// 破坏过的字符，它会抛 Illegal characters in path —— 在协程里一抛就是
+        /// 「替换出错」，把正常流程带崩。
+        /// </summary>
+        internal static string NameOf(string p, bool withExt = true)
+        {
+            if (string.IsNullOrEmpty(p)) return "";
+            try { return withExt ? Path.GetFileName(p) : Path.GetFileNameWithoutExtension(p); }
+            catch (Exception) { return p; }
+        }
 
     }
 }

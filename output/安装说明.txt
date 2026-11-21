@@ -1,0 +1,55 @@
+KK_SceneCardFittingToolkit 2.2.2  移植说明
+=========================================
+
+【装哪里】
+把 BepInEx 文件夹整个覆盖进游戏根目录即可，最终位置：
+    <游戏根目录>\BepInEx\plugins\kk_scenecardfittingtoolkit.dll
+
+【只复制 dll 不够，下面这些必须一起装】
+
+  1. BepInEx 5.4.22 或更高（自带 0Harmony 2.9）
+     —— 插件是 BepInEx 5 / Mono 插件，不支持 BepInEx 6 (IL2CPP)。
+
+  2. KKSAPI 1.48.1 或更高（Koikatsu Sunshine Modding API）
+     —— dll 是按 1.48.1 编译的；KKSAPI 没有强名称，版本低了不会报"缺依赖"，
+        而是运行时抛 TypeLoad / MissingMethod（面板打不开、导出没反应都可能是它）。
+     官方下载：https://github.com/IllusionMods/IllusionModdingAPI/releases
+     选 KKS_ModdingAPI_vX.zip，解压到 BepInEx\plugins。
+
+  3. KKSPE 2.19 或更高（Koikatsu Sunshine Pose Editor，即 "KKPE"）
+     —— 身高锁、动态骨骼碰撞体（Dynamic Bone Collider）吸附控制都用到它里面的类型。
+        缺了插件仍然能启动，但这两块功能会静默失效（日志会写找不到 KKPE 模块）。
+     （注意是 KKSPE，不是老 KK 的 KKPE）
+
+  4. Timeline 1.5 或更高
+     —— 硬依赖：读场景卡时间轴、逐帧驱动播放都靠它。
+
+  5. VideoExport 2.1.1.1
+     —— 实际录制靠它（代码用反射调用，所以缺了插件能启动、但点导出会报错）。
+     —— 重要：VideoExport 目录里的 ffmpeg 必须是**完整版**（ffmpeg 5.x full build）。
+        有些整合包会塞一个裁剪版的 ffmpeg.exe（--disable-everything，没有 AAC 编码器），
+        表现为混流报 "Unrecognized option 'aac_coder'"，成片没有音轨。
+        替换方法：把完整版 ffmpeg.exe 放到
+            BepInEx\plugins\VideoExport\ffmpeg\ffmpeg.exe
+
+【首次启动会生成配置】
+    BepInEx\config\com.kkpeheightlock.cfg
+  里面的 FemaleCard / SceneDir / OutputDir 是**本机绝对路径**，换机器后必须在
+  插件面板里重新选一次角色卡和场景目录，否则导出会找不到卡。
+  所以：分发时不要附带 cfg 文件，让别人自己生成。
+
+【运行环境限制】
+    [BepInProcess("CharaStudio.exe")] —— 只在 CharaStudio（工作室）里加载，
+    主游戏 KoikatsuSunshine.exe 里不会生效。
+
+【功能速查】
+    · 批量导出场景卡（按 Timeline 时长，逐帧驱动，帧数严格对齐）
+    · 换 female 卡：默认显示全部饰品（避免"饰品当头发"的卡变光头），
+      卡里自己标了隐藏的饰品按卡还原
+    · 换人后自动关闭场景里独立动态骨骼碰撞体（[J694] Dynamic Bone Collider 等）
+      对 female 衣服/头发/饰品的吸附；male 与角色本体动骨不受影响
+    · 身高锁：换人后保持 cf_n_height 骨骼缩放
+    · 去码 / 去球 / 直出淡入淡出 / ReShade 泛光暗角（ReShade 参数只读不改）
+
+【版本】
+    2.2.2

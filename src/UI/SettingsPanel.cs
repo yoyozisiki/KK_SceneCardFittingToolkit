@@ -8,6 +8,7 @@ namespace KKPEHeightLock
     public static partial class AutoExportPanel
     {
         // 0~3 对上 CoordinateType 的私服/泳装/睡衣/浴衣，4~6 是 mod 扩出来的槽位。
+        // 最后一项「随机」= 每个 female 从自己卡片里真有衣服的槽位里挑一套。
         // 译文缓存：语言切换后重建一次，别每帧 new 数组。
         private static string[] _outfitNames;
         private static int _outfitNamesVer = -1;
@@ -21,11 +22,38 @@ namespace KKPEHeightLock
                     _outfitNames = new[]
                     {
                         L10n.T("不改变"), L10n.T("私服"), L10n.T("泳装"), L10n.T("睡衣"),
-                        L10n.T("浴衣"), L10n.T("校内"), L10n.T("体操"), L10n.T("社团")
+                        L10n.T("浴衣"), L10n.T("校内"), L10n.T("体操"), L10n.T("社团"),
+                        L10n.T("随机（从已有服饰里挑）")
                     };
                 }
                 return _outfitNames;
             }
+        }
+
+        /// <summary>Outfit 值 → 下拉框下标（-2 随机 排在最后）。</summary>
+        private static int OutfitToIndex(int v)
+        {
+            var names = OutfitNames;
+            if (v == -2) return names.Length - 1;
+            return Mathf.Clamp(v + 1, 0, names.Length - 2);
+        }
+
+        /// <summary>下拉框下标 → Outfit 值。</summary>
+        private static int IndexToOutfit(int i)
+        {
+            var names = OutfitNames;
+            return (i >= names.Length - 1) ? -2 : (i - 1);
+        }
+
+        /// <summary>分段按钮：选中（当前生效）的那个刷成绿色，一眼能看出现在用的是哪种。</summary>
+        private static void DrawSegButton(string text, bool active, float width, Action onClick)
+        {
+            var oldBg = GUI.backgroundColor;
+            if (active) GUI.backgroundColor = new Color(0.15f, 0.75f, 0.30f, 1f);
+            if (GUILayout.Button((active ? "● " : "") + text, _btn,
+                    GUILayout.Width(width), GUILayout.Height(26)))
+                onClick();
+            GUI.backgroundColor = oldBg;
         }
 
         private static Vector2 _setScroll;
@@ -35,34 +63,66 @@ namespace KKPEHeightLock
 
         private static void DrawRightColumn(float bodyH)
         {
-            // ---- 角色卡
+            // ---- 角色卡（主角色卡 1 张 + 次角色卡多张）
             GUILayout.BeginVertical(_panel);
-            GUILayout.Label(L10n.T("替换女性角色卡"), _section);
+            GUILayout.Label(L10n.T("替换角色卡"), _section);
             Rect lblRect = GUILayoutUtility.GetLastRect();
             GUILayout.Space(4);
+
+            string card = CardPool.Main;
+            var subs = CardPool.Subs;
+
+            // ---------- 主角色卡
             GUILayout.BeginHorizontal();
             DrawCardPreview();
             GUILayout.Space(8);
             GUILayout.BeginVertical();
-
+            GUILayout.Label(L10n.T("主角色卡（只换第一个 female）"), _labelSm);
             // 走 PathFix：cfg 里的 `\a` 会被 BepInEx 当成 BEL 读回来，
             // 直接喂给 Path.GetFileNameWithoutExtension 会抛 Illegal characters in path，
             // 整个面板就黑掉（v2.0.2 修复）。
-            string card = PathFix.Read(KKPEHeightLockPlugin.ExportFemaleCard.Value);
-            GUILayout.Label(string.IsNullOrEmpty(card) ? L10n.T("(未选择)")
-                : SafeFileName(card), _labelBold);
-            GUILayout.Label(string.IsNullOrEmpty(card) ? L10n.T("未选角色卡") : ShortPath(card),
-                _labelSm);
-            GUILayout.Space(6);
+            GUILayout.Label(string.IsNullOrEmpty(card) ? L10n.T("(未选择)") : SafeFileName(card), _labelBold);
+            GUILayout.Label(string.IsNullOrEmpty(card)
+                ? L10n.T("不选 = 全部按次角色卡替换")
+                : ShortPath(card), _labelSm);
+            GUILayout.Space(4);
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button(L10n.T("选择角色卡…"), _btn, GUILayout.Width(140), GUILayout.Height(30)))
+            if (GUILayout.Button(L10n.T("选择主角色卡…"), _btn, GUILayout.Width(140), GUILayout.Height(28)))
                 ConfigPanel.PickCardForExport();
             if (!string.IsNullOrEmpty(card)
-                && GUILayout.Button(L10n.T("清除"), _btn, GUILayout.Width(72), GUILayout.Height(30)))
-                KKPEHeightLockPlugin.ExportFemaleCard.Value = "";
+                && GUILayout.Button(L10n.T("清除"), _btn, GUILayout.Width(60), GUILayout.Height(28)))
+                CardPool.ClearMain();
+            GUILayout.EndHorizontal();
+            GUILayout.EndVertical();
             GUILayout.EndHorizontal();
 
-            GUILayout.EndVertical();
+            GUILayout.Space(6);
+            HLine();
+
+            // ---------- 次角色卡：多选列表，编号就是替换顺序
+            GUILayout.Label(L10n.T("次角色卡") + "  (" + subs.Count + ")", _labelBold);
+
+            // 替换顺序：两个分段按钮，当前生效的高亮 —— 用下拉框太不显眼，容易以为没做
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(L10n.T("替换顺序"), _label, GUILayout.Width(64));
+            DrawSegButton(L10n.T("数字优先"), !CardPool.RandomOrder, 96f,
+                delegate { CardPool.RandomOrder = false; });
+            DrawSegButton(L10n.T("随机"), CardPool.RandomOrder, 76f,
+                delegate { CardPool.RandomOrder = true; });
+            GUILayout.EndHorizontal();
+
+            GUILayout.Label(CardPool.RandomOrder
+                ? L10n.T("随机：每个 female 从次卡里随机挑一张")
+                : L10n.T("数字优先：按次卡编号 1、2、3… 依次替换"), _labelSm);
+
+            GUILayout.Label(SubCardsPreview(), _labelSm);
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(L10n.T("选择次角色卡…"), _btn, GUILayout.Width(140), GUILayout.Height(28)))
+                ConfigPanel.PickSubCards();
+            if (subs.Count > 0
+                && GUILayout.Button(L10n.T("清空"), _btn, GUILayout.Width(60), GUILayout.Height(28)))
+                CardPool.ClearSubs();
             GUILayout.EndHorizontal();
 
             GUILayout.Space(6);
@@ -159,9 +219,11 @@ namespace KKPEHeightLock
             GUILayout.BeginHorizontal();
             GUILayout.Label(L10n.T("服装预设"), _label, GUILayout.Width(78));
             Dropdown("outfit", 150f, OutfitNames,
-                Mathf.Clamp(KKPEHeightLockPlugin.ExportOutfit.Value + 1, 0, OutfitNames.Length - 1),
-                delegate(int i) { KKPEHeightLockPlugin.ExportOutfit.Value = i - 1; });
-            GUILayout.Label(L10n.T("不改 = 保留场景原服装"), _labelSm);
+                OutfitToIndex(KKPEHeightLockPlugin.ExportOutfit.Value),
+                delegate(int i) { KKPEHeightLockPlugin.ExportOutfit.Value = IndexToOutfit(i); });
+            GUILayout.Label(KKPEHeightLockPlugin.ExportOutfit.Value == -2
+                ? L10n.T("每人都从自己有的套装里随机")
+                : L10n.T("不改 = 保留场景原服装"), _labelSm);
             GUILayout.EndHorizontal();
 
             DrawPartsRows();
@@ -214,7 +276,7 @@ namespace KKPEHeightLock
         /// <summary>9 个部件一行两个下拉，选项按部位给。</summary>
         private static void DrawPartsRows()
         {
-            var parts = Parts;
+            var parts = ClothesPartSettings.Values;
             int col = 0;
             for (int i = 0; i < parts.Length; i++)
             {
@@ -235,10 +297,7 @@ namespace KKPEHeightLock
                 Dropdown("part" + slot, 116f, items, cur, delegate(int pick)
                 {
                     var st = AutoExport.ClothesKindStates(slot);
-                    var arr = Parts;
-                    arr[slot] = (pick == 0) ? -1 : st[pick - 1];
-                    _partsLoaded = AutoExport.FormatClothesParts(arr);
-                    KKPEHeightLockPlugin.ExportClothesParts.Value = _partsLoaded;
+                    ClothesPartSettings.Set(slot, (pick == 0) ? -1 : st[pick - 1]);
                 }, 26f);
 
                 if (++col >= 2) { GUILayout.EndHorizontal(); col = 0; }
@@ -281,27 +340,21 @@ namespace KKPEHeightLock
             else GUI.Label(r, L10n.T("  无预览"), _labelSm);
         }
 
-        // ---------------------------------------------------------------- 部件缓存
-        private static int[] _parts;
-        private static string _partsLoaded;
-
-        /// <summary>
-        /// 缓存部件数组。不能每帧从配置字符串解析再写回 —— ConfigEntry 一变就落盘，
-        /// 每帧写一次等于每帧一个磁盘 IO。
-        /// </summary>
-        private static int[] Parts
+        // ------------------------------------------------------------ 次角色卡预览
+        /// <summary>次角色卡列表的简短预览：「1 卡A · 2 卡B · 3 卡C …」。</summary>
+        private static string SubCardsPreview()
         {
-            get
+            var list = CardPool.Subs;
+            if (list.Count == 0) return L10n.T("没选次卡：只有第一个 female 会被主卡替换");
+            var sb = new System.Text.StringBuilder();
+            int show = Mathf.Min(3, list.Count);
+            for (int i = 0; i < show; i++)
             {
-                string cfg = KKPEHeightLockPlugin.ExportClothesParts.Value ?? "";
-                int n = AutoExport.ClothesKindNames.Length;
-                if (_parts == null || _parts.Length != n || _partsLoaded != cfg)
-                {
-                    _partsLoaded = cfg;
-                    _parts = AutoExport.ParseClothesParts(cfg, n);
-                }
-                return _parts;
+                if (sb.Length > 0) sb.Append(" · ");
+                sb.Append(i + 1).Append(' ').Append(SafeFileName(list[i]));
             }
+            if (list.Count > show) sb.Append(" · …");
+            return sb.ToString();
         }
     }
 }

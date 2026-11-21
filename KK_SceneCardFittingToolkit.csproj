@@ -27,8 +27,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="src\*.cs" />
-    <Compile Include="src\UI\*.cs" />
+    <!-- 按模块分目录：Core=插件壳与基础、Game=游戏侧能力、
+         Export=批量导出流水线（后端）、Compat=外部插件对接、UI=纯前端界面。
+         这里递归收，新增文件不用改工程。 -->
+    <Compile Include="src\**\*.cs" />
   </ItemGroup>
 
   <ItemGroup>

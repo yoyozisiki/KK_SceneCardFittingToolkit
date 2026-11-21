@@ -23,7 +23,7 @@ namespace KKPEHeightLock
     {
         public const string GUID = "com.kkpeheightlock";
         public const string PluginName = "Scene Card Fitting Toolkit";
-        public const string Version = "2.1.0";
+        public const string Version = "2.2.3";
 
         internal static ManualLogSource Log;
         internal static KKPEHeightLockPlugin Instance;
@@ -63,6 +63,13 @@ namespace KKPEHeightLock
         // ---------------------------------------------------------------- 批量导出
         internal static ConfigEntry<string> ExportSceneDir;
         internal static ConfigEntry<string> ExportFemaleCard;
+        // 次角色卡：多选列表（| 分隔，顺序 = 编号顺序），主卡只替换第一个 female
+        internal static ConfigEntry<string> ExportSubCards;
+        internal static ConfigEntry<bool> ExportSubRandom;
+        // 场景卡列表的界面状态（当前目录 / 滚动位置 / 上次点开的卡），纯记忆用
+        internal static ConfigEntry<string> ExportTreeDir;
+        internal static ConfigEntry<float> ExportTreeScroll;
+        internal static ConfigEntry<string> ExportTreeSel;
         internal static ConfigEntry<string> ExportOutputDir;
         internal static ConfigEntry<bool> ExportReplaceFemale;
         internal static ConfigEntry<bool> ExportShapeFromScene;
@@ -147,7 +154,21 @@ namespace KKPEHeightLock
             ExportSceneDir = Config.Bind("AutoExport", "SceneDir", "UserData/studio/scene",
                 "批量导出扫描场景卡的目录（递归包含子目录）。");
             ExportFemaleCard = Config.Bind("AutoExport", "FemaleCard", "",
-                "批量导出时用来替换 female 的角色卡（.png）。留空 = 不替换。");
+                "批量导出时的【主角色卡】（.png）。场景里第一个 female 换成这张卡；"
+                + "场景里有多个 female 时，剩下的按「次角色卡」列表替换。"
+                + "留空 = 全部按次角色卡替换（次角色卡也没选就不替换）。");
+            ExportSubCards = Config.Bind("AutoExport", "SubCards", "",
+                "批量导出的【次角色卡】列表（| 分隔，顺序就是编号顺序）。"
+                + "可以在列表里多选单卡，也可以整个角色卡文件夹加进来。"
+                + "第一个 female 用主角色卡，其余按这个列表（数字优先或随机）替换。");
+            ExportSubRandom = Config.Bind("AutoExport", "SubCardsRandom", false,
+                "次角色卡的替换顺序：false = 数字优先（按列表编号 1、2、3…），true = 随机。");
+            ExportTreeDir = Config.Bind("AutoExport", "TreeDir", "",
+                "（自动保存）场景卡列表上次打开的目录（相对场景根）。不用手改。");
+            ExportTreeScroll = Config.Bind("AutoExport", "TreeScroll", 0f,
+                "（自动保存）场景卡列表的滚动位置。不用手改。");
+            ExportTreeSel = Config.Bind("AutoExport", "TreeSelected", "",
+                "（自动保存）上次点开预览的场景卡路径。不用手改。");
             ExportOutputDir = Config.Bind("AutoExport", "OutputDir", "",
                 "成片输出目录。留空 = UserData/VideoExport/AutoExport。");
             ExportReplaceFemale = Config.Bind("AutoExport", "ReplaceFemale", true,
@@ -206,6 +227,7 @@ namespace KKPEHeightLock
             // 面板直接黑掉（Path.GetFileName 抛非法字符）、卡也加载不出来。
             // 这里把旧值就地修好，并统一写成 /，以后读回来就不会再被转义。
             MigratePath("FemaleCard", ExportFemaleCard);
+            MigratePath("SubCards", ExportSubCards);
             MigratePath("OutputDir", ExportOutputDir);
             MigratePath("SceneDir", ExportSceneDir);
 
@@ -267,6 +289,10 @@ namespace KKPEHeightLock
 
         private void Update()
         {
+            // 导出中按 ESC = 暂停 / 继续（面板在 ReShade 通路下是隐藏的，
+            // 光靠按钮停不下来，这是唯一能随时按的刹车）
+            AutoExport.TickPauseKey();
+
             if (ToggleKey.Value.IsDown())
             {
                 Enabled.Value = !Enabled.Value;

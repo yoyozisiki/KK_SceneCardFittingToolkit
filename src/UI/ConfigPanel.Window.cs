@@ -16,7 +16,14 @@ public static partial class ConfigPanel
         {
             // ReShade 实时效果通路下，截图抓的是 present 之后的最终画面，
             // 本插件的 IMGUI 会被一起录进视频 —— 所以导出期间整个不画。
-            if (AutoExport.SuppressGui) return;
+            if (AutoExport.SuppressGui)
+            {
+                UiClickBlock.Hide();
+                return;
+            }
+
+            // 缩略图缓存每帧补几张（大图标网格用，不开面板就不干活）
+            ThumbCache.Tick(3);
 
             // 整体缩放(VR 用):矩阵缩放后,所有控件/文字等比放大
             float scale = Mathf.Max(0.5f, KKPEHeightLockPlugin.UIScale.Value);
@@ -43,7 +50,8 @@ public static partial class ConfigPanel
                 {
                     if (_cardPickerVisible)
                         GUI.Window(CardPickWindowId, _cardPickerRect, DrawCardPicker,
-                            L10n.T("选择角色卡"), AutoExportPanel.ThemeWindow);
+                            _cardPickTarget == 2 ? L10n.T("选择次角色卡（可多选）") : L10n.T("选择角色卡"),
+                            AutoExportPanel.ThemeWindow);
                     if (_subdirPickerVisible)
                         GUI.Window(SubdirPickWindowId, _subdirPickerRect, DrawSubdirPicker,
                             L10n.T("选择子目录"), AutoExportPanel.ThemeWindow);
@@ -55,6 +63,42 @@ public static partial class ConfigPanel
             }
 
             GUI.matrix = oldMatrix;
+
+            // 最后铺点击拦截层：所有窗口/弹框的矩形都在这时候才是最新的一帧。
+            // 少了这一步，鼠标点在插件界面上会**同时**点到后面的工作室界面
+            // （最要命的是点到「保存」，点一下折叠箭头就把场景存了）。
+            SyncClickBlock(scale);
+        }
+
+        /// <summary>
+        /// 把当前所有可见窗口的矩形交给 uGUI 拦截层（窗口矩形是逻辑坐标，乘缩放变屏幕像素）。
+        /// </summary>
+        private static void SyncClickBlock(float scale)
+        {
+            try
+            {
+                var rects = new System.Collections.Generic.List<Rect>();
+
+                if (_windowVisible) rects.Add(ScreenRect(_windowRect, scale));
+
+                // 批量导出面板 + 它的下拉浮层（浮层可能探到主面板外面）
+                if (AutoExportPanel.Visible) rects.Add(ScreenRect(AutoExportPanel.PanelRect, scale));
+                if (AutoExportPanel.PopupVisible) rects.Add(ScreenRect(AutoExportPanel.PopupRect, scale));
+
+                if (_cardPickerVisible) rects.Add(ScreenRect(_cardPickerRect, scale));
+                if (_subdirPickerVisible) rects.Add(ScreenRect(_subdirPickerRect, scale));
+
+                UiClickBlock.Set(rects);
+            }
+            catch (Exception)
+            {
+                UiClickBlock.Hide();
+            }
+        }
+
+        private static Rect ScreenRect(Rect r, float scale)
+        {
+            return new Rect(r.x * scale, r.y * scale, r.width * scale, r.height * scale);
         }
 
         private static void DrawWindow(int id)
@@ -196,6 +240,16 @@ public static partial class ConfigPanel
                 if (ci % coordPerRow == coordPerRow - 1 || ci == coordNames.Length - 1)
                     GUILayout.EndHorizontal();
             }
+
+            // 随机换装：只在该角色卡片里「真的有衣服」的套装之间随机
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(L10n.T("随机服装"), GUILayout.Width(140), GUILayout.Height(30)))
+            {
+                if (editChara != null && editChara.charInfo != null)
+                    AutoExport.RandomOutfit(editChara.charInfo);
+            }
+            GUILayout.Label(L10n.T("从角色自己有的套装里随机一套"), new GUIStyle(GUI.skin.label) { fontSize = 10, fontStyle = FontStyle.Italic }, GUILayout.ExpandWidth(true));
+            GUILayout.EndHorizontal();
 
             // 部件三态(收纳,默认收起)
             _clothesPartsExpanded = GUILayout.Toggle(_clothesPartsExpanded, L10n.T("部件三态(展开/收起)"));

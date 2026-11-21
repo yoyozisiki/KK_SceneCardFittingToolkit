@@ -66,7 +66,7 @@ namespace KKPEHeightLock
             return result;
         }
 
-        /// <summary>列出指定模式(0=场景 1=随机女 2=随机男 3=选卡)指定路径的直接子文件夹。路径用 "/" 分隔。</summary>
+        /// <summary>列出指定模式(0=场景 1=随机女 2=随机男)指定路径的直接子文件夹。路径用 "/" 分隔。</summary>
         public static System.Collections.Generic.List<string> ListSubdirsAt(int mode, string path)
         {
             switch (mode)
@@ -74,17 +74,11 @@ namespace KKPEHeightLock
                 case 0: return ListSubdirsOf(KKPEHeightLockPlugin.SceneDir.Value, path);
                 case 1: return ListSubdirsOf(string.IsNullOrEmpty(KKPEHeightLockPlugin.RandomFemaleDir.Value) ? "UserData/chara/female" : KKPEHeightLockPlugin.RandomFemaleDir.Value, path);
                 case 2: return ListSubdirsOf(string.IsNullOrEmpty(KKPEHeightLockPlugin.RandomMaleDir.Value) ? "UserData/chara/male" : KKPEHeightLockPlugin.RandomMaleDir.Value, path);
-                case 3:
-                {
-                    // 选卡目录:当前选卡窗口的根目录(UserData/chara/female 或 male)
-                    string baseDir = System.IO.Path.Combine(UserData.Path, ConfigPanel.CardPickerBaseDir());
-                    return ListSubdirsOf(baseDir, path);
-                }
                 default: return new System.Collections.Generic.List<string>();
             }
         }
 
-        /// <summary>应用选择的子目录(0=场景 1=随机女 2=随机男 3=选卡),直接设为完整相对路径。</summary>
+        /// <summary>应用选择的子目录(0=场景 1=随机女 2=随机男),直接设为完整相对路径。</summary>
         public static void ApplySubdir(int mode, string path)
         {
             switch (mode)
@@ -92,7 +86,6 @@ namespace KKPEHeightLock
                 case 0: _sceneSubdir = path ?? ""; RefreshSceneList(); break;
                 case 1: _rndFemaleSubdir = path ?? ""; break;
                 case 2: _rndMaleSubdir = path ?? ""; break;
-                case 3: ConfigPanel.SetCardPickerDir(path ?? ""); break;
             }
         }
 

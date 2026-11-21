@@ -21,16 +21,24 @@ namespace KKPEHeightLock
 
         public static bool Visible { get { return _visible; } }
 
+        /// <summary>面板矩形（逻辑坐标，已经算进 GUI.matrix 的缩放前）。给点击拦截层用。</summary>
+        internal static Rect PanelRect { get { return _rect; } }
+
+        /// <summary>下拉浮层当前是否打开 / 它的矩形（浮层在主窗口外，也要挡）。</summary>
+        internal static bool PopupVisible { get { return _popupOpen; } }
+        internal static Rect PopupRect { get { return _popupRect; } }
+
         public static void Toggle()
         {
+            if (_visible) SaveViewState();     // 关面板时记住目录折叠状态和滚动位置
             _visible = !_visible;
-            if (_visible && !_scanned) ScanScenes();
+            if (_visible) SceneCatalog.Ensure();
         }
 
         public static void Show()
         {
             _visible = true;
-            if (!_scanned) ScanScenes();
+            SceneCatalog.Ensure();
         }
 
         internal static void OnGUI()
@@ -55,7 +63,7 @@ namespace KKPEHeightLock
 
         private static void DrawAll()
         {
-            if (!_scanned) ScanScenes();
+            SceneCatalog.Ensure();
 
             if (!_rectInit)
             {
@@ -104,7 +112,10 @@ namespace KKPEHeightLock
             }
 
             if (GUI.Button(new Rect(_rect.width - 30f, 4f, 24f, 20f), "×", _btnSm))
+            {
                 _visible = false;
+                SaveViewState();
+            }
 
             // 拖拽区要让开右上角按钮，否则按按钮变成拖窗口
             GUI.DragWindow(new Rect(0, 0, _rect.width - 34f, 26f));
@@ -160,9 +171,9 @@ namespace KKPEHeightLock
 
             bool veReady = AutoExport.VeCtl.Ready;
             bool old = GUI.enabled;
-            GUI.enabled = veReady && _checkedCount > 0;
+            GUI.enabled = veReady && SceneCatalog.CheckedCount > 0;
             if (GUI.Button(new Rect(right - AccentW, y, AccentW, RowH),
-                    L10n.T("开始导出（") + _checkedCount + L10n.T(" 张）"), _btnAccent))
+                    L10n.T("开始导出（") + SceneCatalog.CheckedCount + L10n.T(" 张）"), _btnAccent))
                 StartExport();
             GUI.enabled = old;
 
@@ -190,6 +201,9 @@ namespace KKPEHeightLock
 
             GUILayout.Space(8);
             GUILayout.BeginHorizontal();
+            if (GUILayout.Button(AutoExport.Paused ? L10n.T("继续（ESC）") : L10n.T("暂停（ESC）"),
+                    _btn, GUILayout.Width(150), GUILayout.Height(32)))
+                AutoExport.TogglePause();
             if (GUILayout.Button(L10n.T("停止"), _btn,
                     GUILayout.Width(250), GUILayout.Height(32)))
                 AutoExport.Cancel();
@@ -197,8 +211,12 @@ namespace KKPEHeightLock
                 + AutoExport.Failures.Count + L10n.T(" 张"), _label);
             GUILayout.EndHorizontal();
 
+            GUILayout.Label(AutoExport.Paused
+                ? L10n.T("已暂停：画面停住，可以随便看看。按 ESC 继续 —— 正在录的这张卡会重录，已录好的片段都保留。")
+                : L10n.T("ESC 暂停 / 继续；停止 = 当前这张卡录完就收尾（已录的片段会合并）"), _labelSm);
+
             GUILayout.Space(6);
-            DrawLog(_rect.height - 258f);
+            DrawLog(_rect.height - 282f);
         }
 
         private static void DrawLog(float height)
@@ -215,45 +233,13 @@ namespace KKPEHeightLock
 
         private static void StartExport()
         {
-            var paths = new System.Collections.Generic.List<string>();
-            for (int i = 0; i < _scenes.Count; i++)
-                if (_scenes[i].check) paths.Add(_scenes[i].path);
-            StartExport(paths);
+            StartExport(SceneCatalog.CheckedPaths());
         }
 
-        /// <summary>按给定的卡列表组参数并开跑（勾选和测试入口都走这里）。</summary>
-        internal static void StartExport(System.Collections.Generic.List<string> paths)
+        /// <summary>按给定的卡列表开跑（勾选和测试入口都走这里）。参数组装在后端。</summary>
+        internal static bool StartExport(System.Collections.Generic.List<string> paths)
         {
-            var o = new ExportOptions();
-            for (int i = 0; i < paths.Count; i++) o.Scenes.Add(paths[i]);
-
-            o.FemaleCard = PathFix.Read(KKPEHeightLockPlugin.ExportFemaleCard.Value);
-            o.ReplaceFemale = KKPEHeightLockPlugin.ExportReplaceFemale.Value;
-            o.ShapeFromScene = KKPEHeightLockPlugin.ExportShapeFromScene.Value;
-            o.BustFromScene = KKPEHeightLockPlugin.ExportBustFromScene.Value;
-            o.BoneFromScene = KKPEHeightLockPlugin.ExportBoneFromScene.Value;
-            o.LockHeight = KKPEHeightLockPlugin.ExportLockHeight.Value;
-            o.Outfit = KKPEHeightLockPlugin.ExportOutfit.Value;
-            o.ClothesParts = Parts;
-            o.Decensor = KKPEHeightLockPlugin.ExportDecensor.Value;
-            o.RemoveSpheres = KKPEHeightLockPlugin.ExportRemoveSpheres.Value;
-            o.MinSeconds = KKPEHeightLockPlugin.ExportMinSeconds.Value;
-            o.FadeSeconds = KKPEHeightLockPlugin.ExportFadeSeconds.Value;
-            o.Fps = Mathf.Clamp(KKPEHeightLockPlugin.ExportFps.Value, 1, 240);
-            o.ResizeWidth = Mathf.Max(0, KKPEHeightLockPlugin.ExportResizeWidth.Value);
-            o.ResizeHeight = Mathf.Max(0, KKPEHeightLockPlugin.ExportResizeHeight.Value);
-            o.OutputDir = ResolveDir(PathFix.Read(KKPEHeightLockPlugin.ExportOutputDir.Value));
-            o.Merge = KKPEHeightLockPlugin.ExportMerge.Value;
-            o.KeepSegments = KKPEHeightLockPlugin.ExportKeepSegments.Value;
-            o.UncapFps = KKPEHeightLockPlugin.ExportUncapFps.Value;
-
-            // 后期只剩 ReShade 一条路：泛光/暗角在 present 之后加，
-            // 只有 KKReshade 的共享内存通路能抓到（代价是用不了零拷贝）。
-            // 强度不在这里传：ReShade 面板里是什么就是什么，插件不碰预设。
-            o.RealtimeFx = true;
-            o.ScreenshotPluginIndex = 2;
-
-            AutoExport.Start(KKPEHeightLockPlugin.Instance, o);
+            return ExportRequest.Start(paths);
         }
     }
 }

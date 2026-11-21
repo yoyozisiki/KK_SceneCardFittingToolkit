@@ -89,20 +89,7 @@ public static partial class ConfigPanel
             }
         }
 
-        /// <summary>选卡窗口的根目录(相对 UserData):女/男卡目录。</summary>
-        internal static string CardPickerBaseDir()
-        {
-            return _cardPickerIsFemale ? "chara/female" : "chara/male";
-        }
-
-        /// <summary>设置选卡窗口的当前目录(相对根)。</summary>
-        internal static void SetCardPickerDir(string path)
-        {
-            _cardPickerCurrentDir = path ?? "";
-            LoadCardList();
-        }
-
-        /// <summary>打开子目录选择窗口(0=场景 1=随机女 2=随机男 3=选卡)。</summary>
+        /// <summary>打开子目录选择窗口(0=场景 1=随机女 2=随机男)。</summary>
         private static void OpenSubdirPicker(int mode)
         {
             _subdirPickerMode = mode;

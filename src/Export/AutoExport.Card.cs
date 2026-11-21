@@ -11,13 +11,19 @@ namespace KKPEHeightLock
         private delegate void StringSink(string value);
 
         private static IEnumerator ExportOne(ExportOptions o, string scenePath,
-                                             string segRoot, int index, StringSink done)
+                                             string segRoot, int index, int attempt, StringSink done)
         {
             done(null);
             string tag = "s" + index.ToString("000") + "_" + SafeName(Path.GetFileNameWithoutExtension(scenePath));
-            string segDir = Path.Combine(segRoot, tag);
+            // 被暂停打断后重录时换个目录（_r2、_r3…）：VideoExport 收尾时还在用旧目录，
+            // 我们**不能**去删它（删了它自己会报 DirectoryNotFound），换个新目录最干净。
+            string segDir = Path.Combine(segRoot, attempt > 0 ? (tag + "_r" + (attempt + 1)) : tag);
             try { Directory.CreateDirectory(segDir); }
             catch (Exception e) { Log("建片段目录失败：" + e.Message); yield break; }
+
+            // 暂停中就先别开工（ESC 随时可能被按下）
+            while (Paused && !CancelRequested) yield return null;
+            if (CancelRequested) yield break;
 
             // ---- 1) 加载场景（手动驱动 Studio 原生加载协程）
             SetPhase("加载场景：" + CurrentSceneName);
@@ -63,17 +69,22 @@ namespace KKPEHeightLock
             for (int f = 0; f < 10; f++) yield return null;
 
             // ---- 2) 替换 female（含体型三维来源：体型滑块 / 乳量物理 / 骨架类型 / 身高）
+            // 主次角色卡：主卡只换第一个 female，其余按次卡列表（数字优先 / 随机）。
+            // 只选了次卡也照样替换 —— 这是「主角不用固定某一张卡」的用法。
+            bool hasMain = !string.IsNullOrEmpty(o.FemaleCard);
+            bool hasSubs = o.SubCards != null && o.SubCards.Count > 0;
             bool didReplace = false;
-            if (o.ReplaceFemale && !string.IsNullOrEmpty(o.FemaleCard))
+            if (o.ReplaceFemale && (hasMain || hasSubs))
             {
-                SetPhase("替换 female：" + Path.GetFileNameWithoutExtension(o.FemaleCard));
+                SetPhase("替换 female：主卡 " + (hasMain ? NameOf(o.FemaleCard, false) : "（无）")
+                    + " / 次卡 " + (hasSubs ? o.SubCards.Count + " 张" : "（无）"));
                 IEnumerator rep = ReplaceFemale(o);
                 while (rep.MoveNext()) yield return rep.Current;
                 didReplace = true;
             }
             else if (o.ReplaceFemale)
             {
-                Log("[提示] 勾了「替换 female」但没选角色卡，跳过替换");
+                Log("[提示] 勾了「替换 female」但主卡和次卡都没选，跳过替换");
             }
 
             // ---- 2-b) 服装预设 / 部件状态（放在换人之后、体型已落定，所以先存后还）
@@ -206,6 +217,17 @@ namespace KKPEHeightLock
             // ---- 5) 注入 VideoExport 参数
             // 限长改成「帧数」模式：我们自己一帧一帧把时间轴定位好，VideoExport 只负责
             // 数够帧数就收尾。这样成片帧数和时间轴严格对齐，不会因为渲染掉帧而变速。
+            //
+            // 先等 VideoExport 空下来：上一张卡如果是被暂停打断的，它的 ffmpeg 还在收尾，
+            // 这时候写参数 / 开录会被它拒掉（表现就是「录制没有启动」）。
+            if (VeCtl.IsRecording || VeCtl.IsGenerating)
+            {
+                SetPhase("等上一个片段收尾…");
+                float busy = Time.realtimeSinceStartup + 60f;
+                while ((VeCtl.IsRecording || VeCtl.IsGenerating) && Time.realtimeSinceStartup < busy)
+                    yield return new WaitForSeconds(0.2f);
+            }
+
             SetPhase("配置 VideoExport…");
             if (!VeCtl.Configure(o, segDir, expectFrames, loop))
             {
@@ -216,6 +238,10 @@ namespace KKPEHeightLock
             LogCamera("开录前");
             if (CameraInsideCharacter())
                 Log("[警告] 相机贴在角色身上（<0.35m），这张卡的相机可能没被应用，成片会糊满身体");
+
+            // 开录前最后一次暂停检查：参数都写好了但还没按录制键，暂停在这里不损失任何东西
+            while (Paused && !CancelRequested) yield return null;
+            if (CancelRequested) { HoldTimeline = false; yield break; }
 
             // ---- 6) 开录 + 逐帧驱时间轴
             SetPhase("出帧中…");
@@ -251,10 +277,22 @@ namespace KKPEHeightLock
                 + $"（正片 {content:0.##}s，时间轴 {tlSec:0.##}s{(loop ? "，循环补齐" : "")}，"
                 + $"头尾各 {fadeFrames} 帧淡入淡出）");
 
+            // 开录这一刻清掉暂停标记：之前在等待期间按下的暂停已经在这里兑现了，
+            // 之后再按下的 ESC 才是「打断这张卡」。
+            _pauseInterrupt = false;
             IEnumerator cap = CaptureFrames(o, tlSec, loop, expectFrames, fadeFrames, rtFade);
             while (cap.MoveNext()) yield return cap.Current;
 
             if (o.RealtimeFx) RestoreImgui();   // 录完立刻还原，别拖累下一张卡
+
+            // 暂停打断：视频是半截的，上层会丢掉它并重录这张卡
+            if (_pauseInterrupt)
+            {
+                HoldTimeline = false;
+                SetPhase("已暂停：按 ESC 继续");
+                Log("[暂停] 这张卡没录完，半成品将被丢弃并重录");
+                yield break;
+            }
 
             int gotFrames = VeCtl.CurrentFrame;
             Log($"采集结束：{gotFrames} 帧（目标 {expectFrames}）");

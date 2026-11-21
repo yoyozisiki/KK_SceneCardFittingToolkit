@@ -12,6 +12,18 @@ namespace KKPEHeightLock
     public static partial class AutoExport
     {
         // ======================================================== 替换 female
+        /// <summary>
+        /// 把场景里的 female 换成角色卡：**第一个** female 用主角色卡，
+        /// 其余按次角色卡列表（数字优先 / 随机）依次换。
+        ///
+        /// 规则就三条：
+        ///   · 主卡有值 → 第一个 female 一定用主卡；
+        ///   · 主卡为空 → 第一个 female 也从次卡列表里取（等于「全部按次卡」）；
+        ///   · 次卡列表为空 → 全部退回主卡（老版本「一张卡换全场」的行为）。
+        ///
+        /// 「第一个 female」按工作室对象编号（dicObjectCtrl 的 key）排序，
+        /// 顺序稳定 —— 字典遍历顺序不保证，直接遍历会出现「这次换这张、下次换那张」。
+        /// </summary>
         private static IEnumerator ReplaceFemale(ExportOptions o)
         {
             // 场景刚加载完时网格/材质还在构建，这时候 ChangeChara 会换不干净
@@ -22,31 +34,71 @@ namespace KKPEHeightLock
             catch (Exception) { }
             if (studio == null) { Log("找不到 Studio 实例，跳过替换"); yield break; }
 
-            var chars = new List<Studio.OCIChar>();
+            // 角色按对象编号排序，保证「第一个 female」是稳定的
+            var chars = new List<KeyValuePair<int, Studio.OCIChar>>();
             try
             {
                 if (studio.dicObjectCtrl != null)
                     foreach (var kv in studio.dicObjectCtrl)
                     {
                         var oc = kv.Value as Studio.OCIChar;
-                        if (oc != null) chars.Add(oc);
+                        if (oc != null && oc.sex == 1 && oc.charInfo != null)
+                            chars.Add(new KeyValuePair<int, Studio.OCIChar>(kv.Key, oc));
                     }
             }
             catch (Exception e) { Log("枚举角色失败：" + e.Message); yield break; }
+            chars.Sort(delegate(KeyValuePair<int, Studio.OCIChar> a, KeyValuePair<int, Studio.OCIChar> b)
+            {
+                return a.Key.CompareTo(b.Key);
+            });
 
-            int done = 0;
+            if (chars.Count == 0) { Log("[提示] 场景里没有 female，跳过替换"); yield break; }
+
+            // 主卡
+            string main = string.IsNullOrEmpty(o.FemaleCard) ? null : o.FemaleCard;
+            if (main != null && !File.Exists(main))
+            {
+                Log("[提示] 主角色卡文件不存在：" + main + "（当作没选）");
+                main = null;
+            }
+
+            // 次卡池：丢掉不存在的路径，保持原顺序（顺序就是编号）
+            var pool = new List<string>();
+            if (o.SubCards != null)
+                for (int i = 0; i < o.SubCards.Count; i++)
+                {
+                    string p = o.SubCards[i];
+                    if (string.IsNullOrEmpty(p)) continue;
+                    if (!File.Exists(p)) { Log("[提示] 次角色卡不存在，已跳过：" + p); continue; }
+                    if (pool.Contains(p)) continue;
+                    pool.Add(p);
+                }
+
+            if (main == null && pool.Count == 0)
+            {
+                Log("[提示] 主角色卡和次角色卡都没选，跳过替换");
+                yield break;
+            }
+
+            Log($"替换方案：{chars.Count} 个 female，主卡={(main != null ? NameOf(main) : "（无）")}，"
+                + $"次卡 {pool.Count} 张，顺序={(o.SubRandom ? "随机" : "数字优先")}");
+
+            int done = 0, byMain = 0, bySub = 0;
             var swapped = new List<Studio.OCIChar>();
             var scenes = new List<BodySnap>();
             var cards = new List<BodySnap>();
+            var rng = new System.Random();
 
-            foreach (var oci in chars)
+            for (int n = 0; n < chars.Count; n++)
             {
+                var oci = chars[n].Value;
+                string card = PickCardForFemale(o, n, main, pool, rng, out string tag);
+                if (string.IsNullOrEmpty(card)) continue;
+
                 try
                 {
-                    if (oci == null || oci.charInfo == null) continue;
-                    if (oci.sex != 1) continue;                 // 只换女角色
                     var sceneBody = BodySnap.Capture(oci);
-                    oci.ChangeChara(o.FemaleCard);
+                    oci.ChangeChara(card);
                     // 换人只保证服装换掉，饰品槽的显隐会被原角色/AccStateSync 继承下来，
                     // 而不少卡把头发做成饰品（"Accessories: 01 lulum hair"）→ 成片光头。
                     // 所以换完先全部显示，卡片自己标了隐藏的再按卡还愿。
@@ -57,6 +109,8 @@ namespace KKPEHeightLock
                     scenes.Add(sceneBody);
                     cards.Add(cardBody);
                     done++;
+                    if (tag.StartsWith("主", StringComparison.Ordinal)) byMain++; else bySub++;
+                    Log($"  female#{n + 1} ← [{tag}] {NameOf(card)}");
                 }
                 catch (Exception e) { Log("替换出错：" + e.Message); }
                 yield return null;
@@ -75,7 +129,32 @@ namespace KKPEHeightLock
             if (o.LockHeight)
                 for (int i = 0; i < swapped.Count; i++) BodySnap.LockHeight(swapped[i]);
 
-            Log($"替换完成：{done} 个 female");
+            Log($"替换完成：{done} 个 female（主卡 {byMain} / 次卡 {bySub}）");
+        }
+
+        /// <summary>
+        /// 给第 n 个 female（0 起）挑一张卡。tag 用来打日志：主 / 次1 / 次随机。
+        /// 分配规则见 <see cref="ReplaceFemale"/> 的注释。
+        /// </summary>
+        private static string PickCardForFemale(ExportOptions o, int n, string main,
+                                               List<string> pool, System.Random rng, out string tag)
+        {
+            tag = "";
+            // 第一个 female 优先用主卡
+            if (n == 0 && main != null) { tag = "主"; return main; }
+
+            if (pool != null && pool.Count > 0)
+            {
+                // 有主卡时：第 2 个 female 对应次卡 #1；没主卡时第 1 个就对应次卡 #1
+                int seq = (main != null) ? (n - 1) : n;
+                int idx = o.SubRandom ? rng.Next(pool.Count) : (seq % pool.Count);
+                tag = o.SubRandom ? ("次·随机" + (idx + 1)) : ("次" + (idx + 1));
+                return pool[idx];
+            }
+
+            // 没有次卡：退回主卡（老行为），主卡也没有就返回空
+            if (main != null) { tag = "主(兜底)"; return main; }
+            return null;
         }
 
         /// <summary>
@@ -589,7 +668,7 @@ namespace KKPEHeightLock
         /// </summary>
         private static IEnumerator ApplyClothes(ExportOptions o)
         {
-            bool wantOutfit = o.Outfit >= 0;
+            bool wantOutfit = o.Outfit >= 0 || o.Outfit == -2;   // -2 = 随机
             bool wantParts = false;
             if (o.ClothesParts != null)
                 for (int i = 0; i < o.ClothesParts.Length; i++)
@@ -607,6 +686,7 @@ namespace KKPEHeightLock
             for (int i = 0; i < chars.Count; i++) snaps.Add(BodySnap.Capture(chars[i]));
 
             int nCoord = 0, nParts = 0;
+            var picked = new List<string>();
             for (int i = 0; i < chars.Count; i++)
             {
                 var oc = chars[i];
@@ -614,7 +694,18 @@ namespace KKPEHeightLock
                 {
                     try
                     {
-                        oc.SetCoordinateInfo((ChaFileDefine.CoordinateType)o.Outfit, true);
+                        int slot = o.Outfit;
+                        if (slot == -2)
+                        {
+                            // 随机：只在自己卡片里「真的有衣服」的槽位里挑，
+                            // 挑到空槽会变成裸体，比不换还糟。
+                            var slots = AvailableOutfits(oc.charInfo);
+                            slot = (slots.Count > 0)
+                                ? slots[UnityEngine.Random.Range(0, slots.Count)]
+                                : 0;      // 读不出槽位就退回第一套（私服）
+                            picked.Add("#" + slot + " " + OutfitName(slot));
+                        }
+                        oc.SetCoordinateInfo((ChaFileDefine.CoordinateType)slot, true);
                         nCoord++;
                     }
                     catch (Exception e) { Log("切换套装失败：" + e.Message); }
@@ -636,7 +727,13 @@ namespace KKPEHeightLock
                 yield return null;
             }
 
-            if (nCoord > 0) Log("已切换服装预设 #" + o.Outfit + "（" + nCoord + " 个 female）");
+            if (nCoord > 0)
+            {
+                if (o.Outfit == -2)
+                    Log("已随机切换服装预设（" + nCoord + " 个 female）：" + string.Join("、", picked.ToArray()));
+                else
+                    Log("已切换服装预设 #" + o.Outfit + "（" + nCoord + " 个 female）");
+            }
             if (nParts > 0) Log("已设置部件状态 " + nParts + " 处");
 
             // 套装切换/换装是分帧重建网格的，等它收尾再把身材写回去
@@ -646,6 +743,82 @@ namespace KKPEHeightLock
         }
 
 
+
+        /// <summary>
+        /// 角色卡里「真的有衣服」的服装槽位。随机服装只在这些槽位里挑。
+        ///
+        /// 为什么不能直接 0~6 随机：卡片里的槽位可能是空的（用户只做了私服一套），
+        /// 切到空槽等于把角色扒光 —— 成片是裸的，比不换还糟。
+        /// 判据是「这套衣服里任意一个部件 id > 0」（id = 0 就是没穿这件）。
+        /// </summary>
+        public static List<int> AvailableOutfits(ChaControl ci)
+        {
+            var list = new List<int>();
+            try
+            {
+                var chaFile = ci != null ? ci.chaFile : null;
+                if (chaFile == null || chaFile.coordinate == null) return list;
+
+                var coord = chaFile.coordinate;
+                for (int i = 0; i < coord.Length; i++)
+                {
+                    var c = coord[i];
+                    if (c == null || c.clothes == null || c.clothes.parts == null) continue;
+                    var parts = c.clothes.parts;
+                    for (int k = 0; k < parts.Length; k++)
+                    {
+                        if (parts[k].id != 0) { list.Add(i); break; }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Log("[提示] 读取服装槽位失败（随机服装退回默认槽）：" + e.Message);
+            }
+            return list;
+        }
+
+        /// <summary>服装槽位的显示名（和下拉框那套一致）。</summary>
+        public static string OutfitName(int slot)
+        {
+            switch (slot)
+            {
+                case 0: return L10n.T("私服");
+                case 1: return L10n.T("泳装");
+                case 2: return L10n.T("睡衣");
+                case 3: return L10n.T("浴衣");
+                case 4: return L10n.T("校内");
+                case 5: return L10n.T("体操");
+                case 6: return L10n.T("社团");
+                default: return "#" + slot;
+            }
+        }
+
+        /// <summary>
+        /// 主窗口「服装预设 → 随机」按钮用：给当前角色随机换一套**它自己有的**服装。
+        /// 返回换到第几套，-1 = 没有可用槽位。
+        /// </summary>
+        public static int RandomOutfit(ChaControl ci)
+        {
+            var slots = AvailableOutfits(ci);
+            if (slots.Count == 0)
+            {
+                Log("[提示] 这个角色的卡片里没有可用的服装槽位，随机服装跳过");
+                return -1;
+            }
+            int pick = slots[UnityEngine.Random.Range(0, slots.Count)];
+            try
+            {
+                ci.ChangeCoordinateTypeAndReload((ChaFileDefine.CoordinateType)pick);
+                Log("随机服装 → #" + pick + " " + OutfitName(pick));
+            }
+            catch (Exception e)
+            {
+                Log("[提示] 随机换装失败：" + e.Message);
+                return -1;
+            }
+            return pick;
+        }
 
         private static IEnumerator ConcatVideos(List<string> files, string output, Action<bool> done)
         {
@@ -767,11 +940,11 @@ namespace KKPEHeightLock
                 if (!File.Exists(path))
                 {
                     Log("[ReShade] 没找到预设文件：" + path
-                        + "（泛光/暗角完全按 ReShade 当前状态走，本插件不改）");
+                        + "（效果完全按 ReShade 当前状态走，本插件只读不写）");
                     return;
                 }
 
-                bool techOn = false, techSeen = false;
+                string techniques = null;
                 string section = null;
                 var vals = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 foreach (string raw in File.ReadAllLines(path))
@@ -790,11 +963,7 @@ namespace KKPEHeightLock
 
                     if (section == null || section.Length == 0)
                     {
-                        if (k.Equals("Techniques", StringComparison.OrdinalIgnoreCase))
-                        {
-                            techSeen = true;
-                            if (v.IndexOf(FxTech, StringComparison.OrdinalIgnoreCase) >= 0) techOn = true;
-                        }
+                        if (k.Equals("Techniques", StringComparison.OrdinalIgnoreCase)) techniques = v;
                     }
                     else if (section.Equals(FxEffect, StringComparison.OrdinalIgnoreCase))
                     {
@@ -802,22 +971,55 @@ namespace KKPEHeightLock
                     }
                 }
 
-                Log("[ReShade] 预设 " + path + "：technique " + (techOn ? "已开启" : "未开启")
-                    + "；阈值=" + GetVal(vals, "BloomThreshold")
-                    + " 泛光=" + GetVal(vals, "BloomIntensity")
-                    + " 半径=" + GetVal(vals, "BloomRadius")
-                    + " 暗角=" + GetVal(vals, "VignetteStrength")
-                    + "（以上是 ReShade 面板里的当前值，本插件只读不写）");
+                // 现在用户多半用自己的预设（reshade_ini 里那一堆），所以这里只报「开了哪些效果」，
+                // 不再因为「本插件的 KK_BloomVignette 没勾」就报警 —— 那不是错。
+                var names = new List<string>();
+                if (!string.IsNullOrEmpty(techniques))
+                {
+                    foreach (var item in techniques.Split(','))
+                    {
+                        string it = item.Trim();
+                        if (it.Length == 0) continue;
+                        int at = it.IndexOf('@');
+                        names.Add(at > 0 ? it.Substring(0, at) : it);
+                    }
+                }
 
-                if (!techOn)
-                    Log("[ReShade] 注意：KK_BloomVignette 没有勾上"
-                        + (techSeen ? "" : "（预设里连 Techniques= 都没有）")
-                        + "，成片不会有泛光/暗角 —— 按 Home 打开 ReShade 面板勾一下即可。");
+                Log("[ReShade] 当前预设：" + Path.GetFileName(path)
+                    + "，启用 " + names.Count + " 个效果"
+                    + (names.Count > 0 ? "：" + JoinHead(names, 8) : "（空预设）"));
+
+                bool techOn = !string.IsNullOrEmpty(techniques)
+                              && techniques.IndexOf(FxTech, StringComparison.OrdinalIgnoreCase) >= 0;
+
+                if (techOn)
+                    Log("[ReShade] 本插件的 KK_BloomVignette 也开着：阈值=" + GetVal(vals, "BloomThreshold")
+                        + " 泛光=" + GetVal(vals, "BloomIntensity")
+                        + " 半径=" + GetVal(vals, "BloomRadius")
+                        + " 暗角=" + GetVal(vals, "VignetteStrength")
+                        + "（ReShade 面板里的当前值，本插件只读不写）");
+                else
+                    Log("[ReShade] 当前预设没启用 KK_BloomVignette（泛光/暗角），成片就按你在 ReShade 面板里"
+                        + "勾上的效果录；想用插件的泛光/暗角，在 Home 面板里手动勾一下即可。");
             }
             catch (Exception e)
             {
-                Log("[ReShade] 读预设失败：" + e.Message + "（不影响导出，泛光/暗角按 ReShade 当前状态走）");
+                Log("[ReShade] 读预设失败：" + e.Message + "（不影响导出，效果按 ReShade 当前状态走）");
             }
+        }
+
+        /// <summary>把前 n 个效果名拼成一行（多了用「等」收尾），日志别太长。</summary>
+        private static string JoinHead(List<string> names, int n)
+        {
+            var sb = new StringBuilder();
+            int show = Math.Min(n, names.Count);
+            for (int i = 0; i < show; i++)
+            {
+                if (i > 0) sb.Append("、");
+                sb.Append(names[i]);
+            }
+            if (names.Count > show) sb.Append(" 等");
+            return sb.ToString();
         }
 
         private static string GetVal(Dictionary<string, string> vals, string key)

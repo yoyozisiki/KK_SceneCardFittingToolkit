@@ -15,8 +15,11 @@ namespace KKPEHeightLock
         private static GUIStyle _win, _label, _labelSm, _labelBold, _section, _head;
         private static GUIStyle _btn, _btnAccent, _btnSm, _toggle, _field, _panel, _line;
         private static GUIStyle _row, _rowOn, _rowFolder, _arrow, _checkOn, _checkOff;
+        private static GUIStyle _badge, _tile, _tileOn, _tileName, _tileSub, _tileSubOn;
 
         internal static GUIStyle ThemeWindow { get { InitTheme(); return _win; } }
+        internal static GUIStyle ThemeBadge { get { InitTheme(); return _badge; } }
+        internal static Texture2D ThemeAccentTex { get { InitTheme(); return _texAccent; } }
         internal static GUIStyle ThemeButton { get { InitTheme(); return _btn; } }
         internal static GUIStyle ThemeButtonSm { get { InitTheme(); return _btnSm; } }
         internal static GUIStyle ThemeLabel { get { InitTheme(); return _label; } }
@@ -27,6 +30,12 @@ namespace KKPEHeightLock
         internal static GUIStyle ThemePanel { get { InitTheme(); return _panel; } }
         internal static GUIStyle ThemeRow { get { InitTheme(); return _row; } }
         internal static GUIStyle ThemeRowOn { get { InitTheme(); return _rowOn; } }
+        internal static GUIStyle ThemeRowFolder { get { InitTheme(); return _rowFolder; } }
+        internal static GUIStyle ThemeArrow { get { InitTheme(); return _arrow; } }
+        internal static GUIStyle ThemeTile { get { InitTheme(); return _tile; } }
+        internal static GUIStyle ThemeTileOn { get { InitTheme(); return _tileOn; } }
+        internal static GUIStyle ThemeTileName { get { InitTheme(); return _tileName; } }
+        internal static GUIStyle ThemeTileSub { get { InitTheme(); return _tileSub; } }
 
         private static Texture2D Solid(byte r, byte g, byte b)
         {
@@ -189,6 +198,43 @@ namespace KKPEHeightLock
             _checkOff = new GUIStyle(_checkOn);
             _checkOff.normal.textColor = new Color(0.55f, 0.55f, 0.55f);
             _checkOff.hover.textColor = Color.white;
+
+            // 大图标网格：tile 本身是透明按钮，只有悬停/按下才亮一点
+            _tile = new GUIStyle(GUI.skin.button);
+            _tile.normal.background = null;
+            _tile.hover.background = _texRowHi;
+            _tile.active.background = _texAccent;
+            _tile.focused.background = null;
+            _tile.border = new RectOffset(0, 0, 0, 0);
+            _tile.padding = new RectOffset(0, 0, 0, 0);
+            _tile.normal.textColor = Color.white;
+
+            _tileOn = new GUIStyle(_tile);
+            _tileOn.normal.background = _texRowHi;      // 已勾选：底色常亮 + 外面再描边
+            _tileOn.hover.background = _texBtnHi;
+
+            _tileName = new GUIStyle(_label);
+            _tileName.fontSize = 13;
+            _tileName.wordWrap = true;
+            _tileName.alignment = TextAnchor.UpperCenter;
+            _tileName.clipping = TextClipping.Clip;
+            _tileName.padding = new RectOffset(2, 2, 0, 0);
+
+            _tileSub = new GUIStyle(_tileName);
+            _tileSub.fontSize = 11;
+            _tileSub.alignment = TextAnchor.MiddleCenter;
+            _tileSub.normal.textColor = new Color(0.72f, 0.72f, 0.72f);
+
+            _tileSubOn = new GUIStyle(_tileSub);
+            _tileSubOn.normal.textColor = new Color(0.55f, 0.95f, 0.70f);   // 整目录已勾：绿色
+
+            // 次角色卡的编号角标（缩略图左上角那个 1、2、3…）
+            _badge = new GUIStyle(_label);
+            _badge.fontSize = 14;
+            _badge.fontStyle = FontStyle.Bold;
+            _badge.alignment = TextAnchor.MiddleCenter;
+            _badge.padding = new RectOffset(0, 0, 0, 0);
+            Bg(_badge, _texAccent, _texAccent, _texAccent);
         }
 
         private static void HLine()

@@ -14,8 +14,22 @@ namespace KKPEHeightLock
         /// <summary>要导出的场景卡（绝对路径），顺序就是成片顺序。</summary>
         public List<string> Scenes = new List<string>();
 
-        /// <summary>替换所有 female 用的角色卡；空 = 不替换。</summary>
+        /// <summary>
+        /// 【主角色卡】。场景里**第一个** female 换成这张卡；
+        /// 场景里有多个 female 时，剩下的用 <see cref="SubCards"/> 替换。
+        /// 空 = 不区分主次，全部按次角色卡替换。
+        /// </summary>
         public string FemaleCard = "";
+
+        /// <summary>
+        /// 【次角色卡】列表，顺序就是编号顺序（1、2、3…）。
+        /// 主卡没选时，第一个 female 也从这个列表里取。
+        /// </summary>
+        public List<string> SubCards = new List<string>();
+
+        /// <summary>次角色卡的替换顺序：false = 数字优先，true = 随机。</summary>
+        public bool SubRandom;
+
         public bool ReplaceFemale = true;
 
         // 体型三个维度各自取自哪里：false = 角色卡，true = 场景原角色
@@ -49,6 +63,7 @@ namespace KKPEHeightLock
 
         /// <summary>
         /// 切到第几套预设服装（对应 chaFile.coordinate 槽位）。-1 = 不改变。
+        /// -2 = 随机：每个 female 从**自己卡片里真的有衣服**的槽位里随机挑一套。
         /// 注意：切套装会把 shapeValueBody 冲掉，所以必须在体型合成之前应用。
         /// </summary>
         public int Outfit = -1;

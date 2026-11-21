@@ -110,7 +110,7 @@ namespace KKPEHeightLock
                 // 递归扫描所有子目录的场景卡(用户场景常分散在分类子目录,只扫根目录会漏)
                 foreach (var f in System.IO.Directory.GetFiles(dir, "*.png", System.IO.SearchOption.AllDirectories))
                     _sceneFiles.Add(f);
-                NaturalSort(_sceneFiles);
+                SortNatural(_sceneFiles);
                 _scenesLoaded = true;
 
                 // 定位当前加载的场景(用 savePath 文件名);找不到则保留原索引(夹紧到合法范围)
@@ -140,35 +140,14 @@ namespace KKPEHeightLock
         }
 
         /// <summary>自然排序(数字感知,同 sceneplayer.py 的 fns 排序)。</summary>
-        private static void NaturalSort(System.Collections.Generic.List<string> files)
+        private static void SortNatural(System.Collections.Generic.List<string> files)
         {
             files.Sort(delegate(string a, string b)
             {
-                return CompareNatural(System.IO.Path.GetFileName(a), System.IO.Path.GetFileName(b));
+                return NaturalSort.Compare(System.IO.Path.GetFileName(a), System.IO.Path.GetFileName(b));
             });
         }
 
-        private static int CompareNatural(string a, string b)
-        {
-            int i = 0, j = 0;
-            while (i < a.Length && j < b.Length)
-            {
-                char ca = a[i], cb = b[j];
-                if (char.IsDigit(ca) && char.IsDigit(cb))
-                {
-                    int na = 0, nb = 0;
-                    while (i < a.Length && char.IsDigit(a[i])) { na = na * 10 + (a[i] - '0'); i++; }
-                    while (j < b.Length && char.IsDigit(b[j])) { nb = nb * 10 + (b[j] - '0'); j++; }
-                    if (na != nb) return na.CompareTo(nb);
-                }
-                else
-                {
-                    if (ca != cb) return ca.CompareTo(cb);
-                    i++; j++;
-                }
-            }
-            return a.Length.CompareTo(b.Length);
-        }
 
         /// <summary>加载场景文件。</summary>
         public static void LoadScene(string path)

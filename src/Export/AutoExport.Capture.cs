@@ -52,6 +52,15 @@ namespace KKPEHeightLock
 
                 for (int i = 0; i < totalFrames; i++)
                 {
+                    // 暂停：立刻收尾。接力录制是做不到的（ffmpeg 管道已经开在那里），
+                    // 所以上层会把这段半成品丢掉、继续后重录这张卡。
+                    if (Paused)
+                    {
+                        _pauseInterrupt = true;
+                        Log($"暂停在 {i}/{totalFrames} 帧，这张卡将重录");
+                        break;
+                    }
+
                     // 短卡循环：播到末尾就回 0 重来。判据和旧脚本的 TL LOOP 完全相同
                     // （!isPlaying，或 playbackTime 已经到 duration - 0.02）。
                     if (loop && dur > 0.05f)
@@ -85,6 +94,12 @@ namespace KKPEHeightLock
 
                 ScenePlayerModule.TimelinePause();
                 ApplyFade(0f);
+                // 被打断时把 VideoExport 也停掉：它那边的 ffmpeg 管道必须收尾，
+                // 不然下一张卡开录会抢同一个输出目录。
+                if (_pauseInterrupt)
+                {
+                    try { VeCtl.Stop(); } catch (Exception) { }
+                }
             }
             finally
             {
