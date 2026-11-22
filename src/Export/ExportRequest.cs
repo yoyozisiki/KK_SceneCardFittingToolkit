@@ -23,7 +23,6 @@ namespace KKPEHeightLock
             o.SubCards = new List<string>(CardPool.Subs);
             o.SubRandom = CardPool.RandomOrder;
             o.ReplaceFemale = KKPEHeightLockPlugin.ExportReplaceFemale.Value;
-            o.LegacyColliderIgnore = KKPEHeightLockPlugin.ExportLegacyColliderIgnore.Value;
 
             o.ShapeFromScene = KKPEHeightLockPlugin.ExportShapeFromScene.Value;
             o.BustFromScene = KKPEHeightLockPlugin.ExportBustFromScene.Value;

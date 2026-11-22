@@ -13,6 +13,34 @@ namespace KKPEHeightLock
     {
         // ======================================================== 替换 female
         /// <summary>
+        /// 角色是不是「显示中」（工作室树里的眼睛图标开着）。
+        /// 隐藏的 female 不参与替换：它们多半是摆着当背景/占位、或压根不该出片的，
+        /// 换掉它们既浪费卡，又会把主卡/次卡的分配顺序挤乱（本该露脸的角色被顶到后面）。
+        ///
+        /// 判据（眼睛图标关掉时两条会同时变 false）：
+        ///   · charInfo.visibleAll —— OCIChar.OnVisible(false) 里被置 false，最直接；
+        ///   · treeNodeObject.visible —— 树节点眼睛图标本身的状态，兜底。
+        /// 两条都拿不到时按「显示」处理，宁可多换也别误伤正常角色。
+        /// </summary>
+        private static bool IsFemaleVisible(Studio.OCIChar oc)
+        {
+            if (oc == null) return false;
+            try
+            {
+                var ci = oc.charInfo;
+                if (ci != null && !ci.visibleAll) return false;
+            }
+            catch (Exception) { }
+            try
+            {
+                var node = oc.treeNodeObject;
+                if (node != null && !node.visible) return false;
+            }
+            catch (Exception) { }
+            return true;
+        }
+
+        /// <summary>
         /// 把场景里的 female 换成角色卡：**第一个** female 用主角色卡，
         /// 其余按次角色卡列表（数字优先 / 随机）依次换。
         ///
@@ -23,6 +51,8 @@ namespace KKPEHeightLock
         ///
         /// 「第一个 female」按工作室对象编号（dicObjectCtrl 的 key）排序，
         /// 顺序稳定 —— 字典遍历顺序不保证，直接遍历会出现「这次换这张、下次换那张」。
+        /// 只处理**显示中**的 female：隐藏（眼睛图标关掉）的角色跳过，主/次卡分配也只在
+        /// 显示中的角色之间进行。
         /// </summary>
         private static IEnumerator ReplaceFemale(ExportOptions o)
         {
@@ -40,16 +70,19 @@ namespace KKPEHeightLock
             catch (Exception) { }
             if (studio == null) { Log("找不到 Studio 实例，跳过替换"); yield break; }
 
-            // 角色按对象编号排序，保证「第一个 female」是稳定的
+            // 角色按对象编号排序，保证「第一个 female」是稳定的。
+            // 只收集**显示中**的 female —— 隐藏的（眼睛图标关掉）跳过，不参与替换。
             var chars = new List<KeyValuePair<int, Studio.OCIChar>>();
+            int hiddenCount = 0;
             try
             {
                 if (studio.dicObjectCtrl != null)
                     foreach (var kv in studio.dicObjectCtrl)
                     {
                         var oc = kv.Value as Studio.OCIChar;
-                        if (oc != null && oc.sex == 1 && oc.charInfo != null)
-                            chars.Add(new KeyValuePair<int, Studio.OCIChar>(kv.Key, oc));
+                        if (oc == null || oc.sex != 1 || oc.charInfo == null) continue;
+                        if (!IsFemaleVisible(oc)) { hiddenCount++; continue; }
+                        chars.Add(new KeyValuePair<int, Studio.OCIChar>(kv.Key, oc));
                     }
             }
             catch (Exception e) { Log("枚举角色失败：" + e.Message); yield break; }
@@ -58,7 +91,13 @@ namespace KKPEHeightLock
                 return a.Key.CompareTo(b.Key);
             });
 
-            if (chars.Count == 0) { Log("[提示] 场景里没有 female，跳过替换"); yield break; }
+            if (chars.Count == 0)
+            {
+                Log("[提示] 场景里没有显示中的 female"
+                    + (hiddenCount > 0 ? $"（另有 {hiddenCount} 个隐藏角色被跳过）" : "")
+                    + "，跳过替换");
+                yield break;
+            }
 
             // 主卡
             string main = string.IsNullOrEmpty(o.FemaleCard) ? null : o.FemaleCard;
@@ -86,7 +125,9 @@ namespace KKPEHeightLock
                 yield break;
             }
 
-            Log($"替换方案：{chars.Count} 个 female，主卡={(main != null ? NameOf(main) : "（无）")}，"
+            Log($"替换方案：{chars.Count} 个显示中的 female"
+                + (hiddenCount > 0 ? $"（跳过 {hiddenCount} 个隐藏角色）" : "")
+                + $"，主卡={(main != null ? NameOf(main) : "（无）")}，"
                 + $"次卡 {pool.Count} 张，顺序={(o.SubRandom ? "随机" : "数字优先")}");
 
             int done = 0, byMain = 0, bySub = 0;
@@ -141,9 +182,6 @@ namespace KKPEHeightLock
             if (o.LockHeight)
                 for (int i = 0; i < swapped.Count; i++) BodySnap.LockHeight(swapped[i]);
 
-            // 最后一道：关掉饰品的动骨。
-            // 换人后新饰品的头发链会被场景里那套「按骨骼路径写的忽略名单 / 碰撞器」漏掉，
-            // 直接把链拉进脸里（#278 那种动态卡最典型）。关掉就固定成绑定姿势，稳定可复现。
             Log($"替换完成：{done} 个 female（主卡 {byMain} / 次卡 {bySub}）");
         }
 
@@ -402,198 +440,6 @@ namespace KKPEHeightLock
             }
         }
 
-        /// <summary>
-        /// 关掉场景里「独立动态骨骼碰撞体」（[J694] Dynamic Bone Collider 这类）对
-        /// **female 衣服 / 头发 / 饰品**的吸附效果。
-        ///
-        /// 手动操作是：选中 Dynamic Bone Collider → KKPE 高级模式 → 把 female 的
-        /// 衣服 / 头发那一排 on 逐个取消。这里调 KKPE 的单点接口
-        /// <c>CollidersEditor.SetIgnoreDynamicBone(collider, 角色控制器, 动骨, true)</c>，
-        /// 只断 female 的这三类部件：
-        ///   · male 的动骨、角色本体/胸部动骨一律不动 —— 之前用
-        ///     SetIgnoreAllDynamicBones 一刀切，把 male 的节点也断掉了，这里改回来；
-        ///   · 碰撞体只处理挂在道具上的独立碰撞体（_isLoneCollider）。
-        /// </summary>
-        private static int TurnOffDynamicBoneColliders()
-        {
-            int colliderCount = 0, boneCount = 0, noEditor = 0, scanned = 0;
-            try
-            {
-                var pcType = HarmonyLib.AccessTools.TypeByName("HSPE.PoseController");
-                var ceType = HarmonyLib.AccessTools.TypeByName("HSPE.AMModules.CollidersEditor");
-                var targetType = HarmonyLib.AccessTools.TypeByName("HSPE.AMModules.GenericOCITarget");
-                if (pcType == null || ceType == null || targetType == null)
-                {
-                    Log("[提示] 没找到 KKPE 的碰撞体模块，跳过关闭吸附");
-                    return 0;
-                }
-
-                const BindingFlags Inst =
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
-                const BindingFlags Stat =
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
-
-                var fControllers = pcType.GetField("_poseControllers", Stat);
-                var fTarget = pcType.GetField("_target", Inst);
-                var fEditor = pcType.GetField("_collidersEditor", Inst);
-                var fOciItem = targetType.GetField("ociItem", Inst);
-                var fOciChar = targetType.GetField("ociChar", Inst);
-                var fCollider = ceType.GetField("_colliderTarget", Inst);
-                var fLone = ceType.GetField("_isLoneCollider", Inst);
-                var mIgnore = ceType.GetMethod("SetIgnoreDynamicBone", Inst);
-
-                if (fControllers == null || fTarget == null || fEditor == null || fOciItem == null ||
-                    fOciChar == null || fCollider == null || mIgnore == null)
-                {
-                    Log("[提示] KKPE 碰撞体接口字段对不上，跳过关闭吸附");
-                    return 0;
-                }
-
-                var box = fControllers.GetValue(null) as IEnumerable;
-                if (box == null) return 0;
-
-                var editors = new List<object>();                        // 独立碰撞体的 CollidersEditor
-                var colliders = new List<object>();                      // 一一对应的 DynamicBoneCollider
-                var charPc = new Dictionary<Studio.OCIChar, object>();   // 角色 → 它的 PoseController
-
-                foreach (var entry in box)
-                {
-                    object pc = entry;
-                    // _poseControllers 可能是 List 也可能是 Dictionary，字典项取 Value
-                    if (pc != null && pc.GetType().IsGenericType &&
-                        pc.GetType().GetGenericTypeDefinition() == typeof(KeyValuePair<,>))
-                        pc = pc.GetType().GetProperty("Value").GetValue(pc, null);
-                    if (pc == null) continue;
-
-                    scanned++;
-                    var target = fTarget.GetValue(pc);
-                    if (target == null) continue;
-
-                    // 角色：先记下它的控制器，稍后按 female 逐个处理
-                    var ociChar = fOciChar.GetValue(target) as Studio.OCIChar;
-                    if (ociChar != null) { charPc[ociChar] = pc; continue; }
-
-                    // 道具：只认「独立碰撞体」
-                    if (fOciItem.GetValue(target) as Studio.OCIItem == null) continue;
-
-                    var editor = fEditor.GetValue(pc);
-                    if (editor == null) { noEditor++; continue; }
-
-                    var collider = fCollider.GetValue(editor);
-                    if (collider == null) continue;
-                    if (fLone != null && !(bool)fLone.GetValue(editor)) continue;
-
-                    editors.Add(editor);
-                    colliders.Add(collider);
-                    colliderCount++;
-                }
-
-                // 只断 female 的衣服 / 头发 / 饰品；male 与角色本体的动骨一律不动
-                foreach (var kv in charPc)
-                {
-                    var oci = kv.Key;
-                    if (oci == null || oci.sex != 1) continue;              // 1 = female
-                    var ci = oci.charInfo;
-                    if (ci == null) continue;
-
-                    var parts = new List<GameObject>();
-                    AddIfAny(parts, ci.objHair);
-                    AddIfAny(parts, ci.objClothes);
-                    // 饰品必须走 CollectObjects：KKS 里 objAccessory 常常是 null，
-                    // 用它会一条饰品骨骼都收不到 → 忽略名单里没有饰品 → 碰撞器继续抓饰品头发。
-                    int accBefore = parts.Count;
-                    CollectAccessoryObjects(ci, parts);
-                    int accCount = parts.Count - accBefore;
-
-                    var bones = new List<object>();
-                    for (int i = 0; i < parts.Count; i++)
-                    {
-                        var go = parts[i];
-                        if (go == null) continue;
-                        foreach (var d in go.GetComponentsInChildren<DynamicBone>(true)) bones.Add(d);
-                        foreach (var d in go.GetComponentsInChildren<DynamicBone_Ver02>(true)) bones.Add(d);
-
-                        // 兜底：按类型名再收一遍（mod 自带的 DynamicBone 变体、
-                        // 以及上面两个类型没覆盖到的写法）。类型不匹配时 Invoke 会抛，已被 catch 掉。
-                        foreach (var b in go.GetComponentsInChildren<Behaviour>(true))
-                        {
-                            if (b == null) continue;
-                            string tn = b.GetType().Name;
-                            if (tn.IndexOf("DynamicBone", StringComparison.OrdinalIgnoreCase) < 0) continue;
-                            if (tn.IndexOf("Collider", StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                            if (!bones.Contains(b)) bones.Add(b);
-                        }
-                    }
-                    if (bones.Count == 0) { continue; }
-                    Log("[碰撞体] 角色动骨 " + bones.Count + " 个（饰品对象 " + accCount
-                        + " 个 / 头发 " + (ci.objHair != null ? ci.objHair.Length : 0)
-                        + " / 衣服 " + (ci.objClothes != null ? ci.objClothes.Length : 0) + "）");
-
-                    for (int e = 0; e < editors.Count; e++)
-                    {
-                        for (int b = 0; b < bones.Count; b++)
-                        {
-                            try
-                            {
-                                mIgnore.Invoke(editors[e],
-                                    new object[] { colliders[e], kv.Value, bones[b], true });
-                                boneCount++;
-                            }
-                            catch (Exception) { }
-                        }
-                    }
-                }
-
-                Log("[碰撞体] 已关闭 " + colliderCount + " 个独立碰撞体对 female 的吸附"
-                    + "（衣服/头发/饰品动骨 " + boneCount + " 处，扫了 " + scanned + " 个 KKPE 对象"
-                    + (noEditor > 0 ? "，" + noEditor + " 个道具没生成 KKPE 编辑器" : "")
-                    + "；male 与本体动骨未改动）");
-            }
-            catch (Exception e) { Log("[提示] 关闭动态骨骼碰撞体吸附失败：" + e.Message); }
-            return boneCount;
-        }
-
-        /// <summary>把数组里非空的 GameObject 收进列表（objHair / objClothes / objAccessory 用）。</summary>
-        /// <summary>
-        /// 收集一个角色所有饰品根节点。
-        /// 不能用 chaInfo.objAccessory：KKS 里它经常是 null（或只含可见槽），
-        /// 拿它遍历会一条饰品骨骼都收不到。
-        /// </summary>
-        private static void CollectAccessoryObjects(ChaControl ci, List<GameObject> into)
-        {
-            if (ci == null || into == null) return;
-            for (int slot = 0; slot < 20; slot++)
-            {
-                GameObject go = null;
-                try
-                {
-                    var comp = ci.GetAccessoryComponent(slot);
-                    if (comp != null) go = comp.gameObject;
-                }
-                catch (Exception) { }
-                if (go != null && !into.Contains(go)) into.Add(go);
-            }
-            try
-            {
-                var all = ci.transform.GetComponentsInChildren<Transform>(true);
-                for (int i = 0; i < all.Length; i++)
-                {
-                    var t = all[i];
-                    if (t == null || t.name.Length < 7) continue;
-                    if (!t.name.StartsWith("ca_slot", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (!into.Contains(t.gameObject)) into.Add(t.gameObject);
-                }
-            }
-            catch (Exception) { }
-        }
-
-        private static void AddIfAny(List<GameObject> list, GameObject[] arr)
-        {
-            if (arr == null) return;
-            for (int i = 0; i < arr.Length; i++)
-                if (arr[i] != null) list.Add(arr[i]);
-        }
-
         private static string[] _clothesKindNames;
 
         /// <summary>
@@ -715,7 +561,9 @@ namespace KKPEHeightLock
                 foreach (var kv in studio.dicObjectCtrl)
                 {
                     var oc = kv.Value as Studio.OCIChar;
-                    if (oc != null && oc.sex == 1 && oc.charInfo != null) list.Add(oc);
+                    if (oc == null || oc.sex != 1 || oc.charInfo == null) continue;
+                    if (!IsFemaleVisible(oc)) continue;   // 隐藏角色不参与换装/体型等操作
+                    list.Add(oc);
                 }
             }
             catch (Exception e) { Log("枚举角色失败：" + e.Message); }

@@ -23,7 +23,7 @@ namespace KKPEHeightLock
     {
         public const string GUID = "com.kkpeheightlock";
         public const string PluginName = "Scene Card Fitting Toolkit";
-        public const string Version = "2.3.0";
+        public const string Version = "2.3.1";
 
         internal static ManualLogSource Log;
         internal static KKPEHeightLockPlugin Instance;
@@ -72,8 +72,6 @@ namespace KKPEHeightLock
         internal static ConfigEntry<string> ExportTreeSel;
         internal static ConfigEntry<string> ExportOutputDir;
         internal static ConfigEntry<bool> ExportReplaceFemale;
-        /// <summary>旧做法：逐骨骼给碰撞体补忽略名单（默认关，仅做对照/回归用）。</summary>
-        internal static ConfigEntry<bool> ExportLegacyColliderIgnore;
         internal static ConfigEntry<bool> ExportShapeFromScene;
         internal static ConfigEntry<bool> ExportBustFromScene;
         internal static ConfigEntry<bool> ExportBoneFromScene;
@@ -175,10 +173,6 @@ namespace KKPEHeightLock
                 "成片输出目录。留空 = UserData/VideoExport/AutoExport。");
             ExportReplaceFemale = Config.Bind("AutoExport", "ReplaceFemale", true,
                 "导出前把所有 female 替换成上面那张角色卡。");
-            ExportLegacyColliderIgnore = Config.Bind("AutoExport", "LegacyColliderIgnore", false,
-                "旧做法：换人后给场景碰撞体逐个骨骼补「忽略动骨」名单（衣服/头发/饰品）。\n"
-                + "默认关。真正起作用的是 ColliderBindingFix（关掉 KKPE 的「Enable New Dynamic Bones」），\n"
-                + "只有在发现衣服/头发仍被吸时再打开做对照。");
             ExportShapeFromScene = Config.Bind("AutoExport", "ShapeFromScene", false,
                 "体型 44 个滑块取自场景原角色（关 = 用角色卡自己的）。");
             ExportBustFromScene = Config.Bind("AutoExport", "BustFromScene", false,

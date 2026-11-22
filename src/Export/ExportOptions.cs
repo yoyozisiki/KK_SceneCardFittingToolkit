@@ -31,8 +31,6 @@ namespace KKPEHeightLock
         public bool SubRandom;
 
         public bool ReplaceFemale = true;
-        /// <summary>旧做法：逐骨骼补忽略名单（默认关）。</summary>
-        public bool LegacyColliderIgnore = false;
 
         // 体型三个维度各自取自哪里：false = 角色卡，true = 场景原角色
         public bool ShapeFromScene;

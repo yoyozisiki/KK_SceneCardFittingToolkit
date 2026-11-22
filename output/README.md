@@ -2,7 +2,7 @@
 
 这里放的是**能直接覆盖进游戏根目录**的成品，不用再从别处东拼西凑。
 
-版本：**Scene Card Fitting Toolkit 2.2.3**（`BepInEx/plugins/kk_scenecardfittingtoolkit.dll`）
+版本：**Scene Card Fitting Toolkit 2.3.1**（`BepInEx/plugins/kk_scenecardfittingtoolkit.dll`）
 
 ## 怎么装
 

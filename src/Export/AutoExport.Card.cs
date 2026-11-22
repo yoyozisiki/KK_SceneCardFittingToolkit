@@ -120,29 +120,17 @@ namespace KKPEHeightLock
                     + $"播放中={Yn(ScenePlayerModule.TimelinePlaying)}）");
             }
 
-            // ---- 2-d) 关掉场景里独立动态骨骼碰撞体对 female 的吸附
-            // 换完人之后新角色的衣服/头发是全新的动态骨骼，场景里那些
-            // [J694] Dynamic Bone Collider 会继续抓着它们（手动要在 KKPE 高级模式里
-            // 一个个取消 on）。这里统一关掉，成片里衣服/头发就不会被吸住。
+            // ---- 2-d) 关闭 KKPE 碰撞体的「Enable New Dynamic Bones」
+            // 换人后新饰品/衣服的动骨会被 KKPE 自动登记进碰撞体影响列表 → 头发被吸进脸。
+            // 唯一有效的修复是关掉这个开关（ReplaceFemale 开头已经关过一次），
+            // 角色重建后可能又冒出新的碰撞体/编辑器，这里再补关一次。
             if (didReplace)
             {
                 SetPhase("修复碰撞体误吸附饰品…");
-                // 角色重建后可能出现新的碰撞体/编辑器，再关一次「自动吸附新动骨」
                 try { ColliderBindingFix.DisableAutoAttachNewBones(); }
                 catch (Exception) { }
-
-                // 旧做法（默认关）：逐个骨骼给碰撞体补「忽略动骨」名单。
-                // 只有发现衣服/头发仍被吸时才需要打开做对照。
-                if (o.LegacyColliderIgnore)
-                {
-                    try { TurnOffDynamicBoneColliders(); }
-                    catch (Exception e) { Log("[提示] 补忽略名单出错：" + e.Message); }
-                }
                 yield return null;
             }
-
-            // 关动骨是**另一个独立开关**：只有用户主动勾了才做，避免"只想修绑定、不想删动骨"被误伤。
-
 
             // ---- 3) 去码 / 去球
             if (o.RemoveSpheres)

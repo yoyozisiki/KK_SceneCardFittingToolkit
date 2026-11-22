@@ -4,6 +4,32 @@
 
 ---
 
+## 2.3.1
+
+### 清理：删除旧的逐骨骼碰撞器忽略代码（衣服吸附验证通过）
+
+2.3.0 里保留做对照的 `TurnOffDynamicBoneColliders`（逐骨骼补忽略名单）已确认衣服/头发
+吸附同样被 `Enable New Dynamic Bones` 修复解决，旧代码全部删除：
+
+- `Export/AutoExport.Scene.cs`：`TurnOffDynamicBoneColliders()` /
+  `CollectAccessoryObjects()` / `AddIfAny()` 及相关注释；
+- `Export/ExportOptions.cs`：`LegacyColliderIgnore` 字段；
+- `Core/KKPEHeightLock.cs`：配置 `ExportLegacyColliderIgnore`；
+- `Export/ExportRequest.cs`：对应的取值赋值。
+
+现在碰撞体这块只剩 `Game/ColliderBindingFix.cs` 一条路径（换人前后各关一次
+`Enable New Dynamic Bones`），没有配置开关、默认总是执行。
+
+### 修复：隐藏的 female 不再参与角色卡替换
+
+之前场景里被眼睛图标隐藏的 female 也会被换卡，既浪费卡又把主卡/次卡的分配顺序挤乱。
+现在 `ReplaceFemale` / `ApplyClothes` 只处理**显示中**的角色：
+
+- 判据：`charInfo.visibleAll`（眼睛图标 `OnVisible(false)` 时置 false），
+  辅以 `treeNodeObject.visible` 兜底；
+- 隐藏角色被跳过，主卡/次卡只在显示中的角色之间分配；
+- 日志会报「跳过 N 个隐藏角色」。
+
 ## 2.3.0
 
 ### 清理：只留真正有效的那一条修复
