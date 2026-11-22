@@ -93,6 +93,33 @@ namespace KKPEHeightLock
             return 0;
         }
 
+        // 「这张卡选没选」文件夹行每帧都要问，不能线性扫列表
+        private static HashSet<string> _subSet;
+        private static int _subSetCount = -1;
+        private static string _subSetRaw;
+
+        /// <summary>这张卡是否已在次卡列表里（斜杠/大小写不敏感）。</summary>
+        public static bool Contains(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            var list = Subs;
+            string raw = _subsRaw ?? "";
+            if (_subSet == null || _subSetCount != list.Count
+                || !string.Equals(_subSetRaw, raw, StringComparison.Ordinal))
+            {
+                _subSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < list.Count; i++) _subSet.Add(Norm(list[i]));
+                _subSetCount = list.Count;
+                _subSetRaw = raw;
+            }
+            return _subSet.Contains(Norm(path));
+        }
+
+        private static string Norm(string p)
+        {
+            return (p ?? "").Replace('\\', '/').Trim();
+        }
+
         /// <summary>选中/取消一张次卡（多选弹框里点一下就调这个）。</summary>
         public static void ToggleSub(string path)
         {

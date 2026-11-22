@@ -126,11 +126,23 @@ namespace KKPEHeightLock
             // 一个个取消 on）。这里统一关掉，成片里衣服/头发就不会被吸住。
             if (didReplace)
             {
-                SetPhase("关闭动态骨骼碰撞体吸附…");
-                try { TurnOffDynamicBoneColliders(); }
-                catch (Exception e) { Log("[提示] 关闭碰撞体吸附出错：" + e.Message); }
+                SetPhase("修复碰撞体误吸附饰品…");
+                // 角色重建后可能出现新的碰撞体/编辑器，再关一次「自动吸附新动骨」
+                try { ColliderBindingFix.DisableAutoAttachNewBones(); }
+                catch (Exception) { }
+
+                // 旧做法（默认关）：逐个骨骼给碰撞体补「忽略动骨」名单。
+                // 只有发现衣服/头发仍被吸时才需要打开做对照。
+                if (o.LegacyColliderIgnore)
+                {
+                    try { TurnOffDynamicBoneColliders(); }
+                    catch (Exception e) { Log("[提示] 补忽略名单出错：" + e.Message); }
+                }
                 yield return null;
             }
+
+            // 关动骨是**另一个独立开关**：只有用户主动勾了才做，避免"只想修绑定、不想删动骨"被误伤。
+
 
             // ---- 3) 去码 / 去球
             if (o.RemoveSpheres)
@@ -277,6 +289,8 @@ namespace KKPEHeightLock
                 + $"（正片 {content:0.##}s，时间轴 {tlSec:0.##}s{(loop ? "，循环补齐" : "")}，"
                 + $"头尾各 {fadeFrames} 帧淡入淡出）");
 
+            // 开录前再确认一次：应用姿态/配参数这些步骤有没有把饰品动骨重新挂上。
+            // 有残留就当场再关一遍 —— 这段已经离渲染很近了，关完就能进片子。
             // 开录这一刻清掉暂停标记：之前在等待期间按下的暂停已经在这里兑现了，
             // 之后再按下的 ESC 才是「打断这张卡」。
             _pauseInterrupt = false;

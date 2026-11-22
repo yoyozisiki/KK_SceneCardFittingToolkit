@@ -4,6 +4,340 @@
 
 ---
 
+## 2.3.0
+
+### 清理：只留真正有效的那一条修复
+
+`Enable New Dynamic Bones` 实测有效，其余尝试（补忽略名单 / 清空动骨碰撞器 /
+停用碰撞体对象 / 重写饰品位移缩放 / 冻结饰品动骨）全部**无效**，已删除：
+
+| 删掉的东西 | 曾经的用途 |
+|---|---|
+| `Game/AccessoryDynamics.cs` | 关闭饰品动骨、清空 `m_Colliders`、诊断输出 |
+| `Game/AccessoryMoves.cs` | 按卡片重写饰品位移/缩放（会让头发乱飞，已确认无效） |
+| `Game/SceneColliders.cs` | 停用场景碰撞体对象 |
+| 面板两个开关 | 「修复碰撞体误吸附饰品」「关掉饰品动骨」 |
+| 配置 `FixColliderBinding` / `KillAccessoryDynamics` / `DiagnoseAccessoryDynamics` / `ApplyAccessoryMoves` | — |
+
+新增 `Game/ColliderBindingFix.cs`，只做一件事：换人前（和换人后）把 KKPE 所有
+`CollidersEditor._addNewDynamicBonesAsDefault` 置 false。**不再有开关，默认总是执行**，
+日志仍是 `[碰撞体] 已关闭 N 个碰撞体的「Enable New Dynamic Bones」`。
+
+### 衣服/头发吸附：旧代码已默认关闭，等实测
+
+原来那套「逐骨骼给碰撞体补忽略名单」（`TurnOffDynamicBoneColliders`）是给衣服/头发写的，
+现在默认**不执行**（`LegacyColliderIgnore = false`，代码保留、随时能开回来），
+用来验证「新开关是不是把衣服吸附也一起解决了」：
+
+- 如果衣服现在也正常 → 这套旧代码可以彻底删掉；
+- 如果衣服仍会被吸 → 把 `LegacyColliderIgnore` 设 `true` 做对照，再决定怎么处理。
+
+## 2.2.14
+
+### 找到社区标准答案：KKPE 碰撞体的「Enable New Dynamic Bones」
+
+hongcha 这类场景换人后头发被吸进脸/身体，**不是我们之前猜的任何一项**，而是：
+KKPE 的每个 Dynamic Bone Collider 上有个开关 **「Enable New Dynamic Bones」**，
+开着的时候，角色一换、**新出现的动骨会被自动登记进它的影响列表** —— 新卡的饰品头发
+瞬间变成碰撞对象，就被"吸"进去了。
+
+社区（F95zone / kknow，专门针对 hongcha 场景）给的解法原话：
+
+> "it's due to the dynamic bone colliders. Select the bone collider under your character
+> (usually under Part: Vagina), click on **Adv. Mode** in KKPE, and then just tick off
+> **Enable New Dynamic Bones**. Now every time you switch the character it should be fine."
+
+对应字段（用 Mono.Cecil 从 `KKSPE.dll` 读出来的）：
+
+```
+HSPE.AMModules.CollidersEditor
+   F Boolean _addNewDynamicBonesAsDefault       ← 就是它
+   F Boolean _addNewDynamicBonesAsDefaultSaved
+   M Void SetIgnoreDynamicBone(...)
+```
+
+**实现**：`SceneColliders.DisableAutoAttachNewBones()` 反射遍历
+`HSPE.PoseController._poseControllers` → 每个 `_collidersEditor` → 把
+`_addNewDynamicBonesAsDefault` 置 `false`。调用时机两次：
+
+1. **ChangeChara 之前**（关键：晚了新骨骼已经登记进去了）；
+2. 换人 + 姿态应用之后（新角色可能带出新的编辑器）。
+
+日志：`[碰撞体] 已关闭 N 个碰撞体的「Enable New Dynamic Bones」（换人后不再自动吸附新动骨）`。
+
+跟 `FixColliderBinding` 开关一起走，默认开。之前那些办法（补忽略名单 / 清空 m_Colliders /
+停用碰撞体对象）全部保留为兜底，但按社区经验，开关这一条才是根上的。
+
+## 2.2.13
+
+### 回滚：按卡片重写饰品位移/缩放（默认关）
+
+#278 实测重写后头发乱飞、变光头 —— 读到的 addMove 不是这件饰品该用的值（
+`nowCoordinate` 与实际渲染的坐标/配件不一定对齐），跟画面异常也无关。已改成
+`ApplyAccessoryMoves = false`（默认关，只有明确需要时才开），不再调用。
+
+### 新解法：直接清空「饰品动骨自己的碰撞器列表」
+
+这才是「碰撞器错误绑定到饰品动骨」的正面解法，不依赖 KKPE 的忽略名单：
+
+```
+DynamicBone_Ver01.m_Colliders : List<...>
+DynamicBone_Ver02.Colliders   : List<...>
+```
+
+对每个饰品动骨：读这个列表 → **Clear()** → 按版本重建粒子
+（Ver01: `SetupParticles` / `InitTransforms` / `ResetParticlesPosition`；
+Ver02: `InitLocalPosition` / `ResetParticlesPosition`）。
+
+效果：碰撞器再也管不到饰品骨骼，但**动骨照常摆动**（不像 `enabled=false` 那样冻结）。
+日志：`[饰品] 已解除 N 处碰撞器吸附（M 个饰品动骨，动骨本身保持启用）`。
+
+这个开关跟着「修复碰撞体误吸附饰品」一起走，默认开。
+
+## 2.2.12
+
+### 修 2.2.11 反射读不到数据（现在用强类型接口）
+
+用 Mono.Cecil 直接读 `Assembly-CSharp`，拿到确切结构：
+
+```
+ChaControl.nowCoordinate              : ChaFileCoordinate      ← 当前服装坐标
+ChaFileCoordinate.accessory           : ChaFileAccessory
+ChaFileAccessory.parts                : PartsInfo[]
+ChaFileAccessory.PartsInfo.addMove    : Vector3[2, 3]
+    [0,0]=位置 [0,1]=旋转 [0,2]=缩放     ← 当前值
+    [1,0..2] = 原始值                    ← 「还原」用
+```
+
+2.2.11 里用 `chaFile.coordinate` + `addMove as Vector3[]` 去读 —— 前者在基类
+`ChaFile` 上（`ChaFileControl` 自己只有两个字段），后者是 **二维** `Vector3[,]`，
+所以一路返回 0，日志一条 `[饰品]` 都没有。现在改成直接用
+`charInfo.nowCoordinate.accessory.parts[slot].addMove[0, 0..2]`，并 compare 后再写，
+日志会打出每件饰品实际写入的值：
+
+```
+[饰品] 槽 01 ← pos(0,-4.2,2) rot(0,0,0) scl(1.28,1.28,1.31)
+[饰品] 已按卡片重写 5 件饰品的位移/缩放
+```
+
+> 顺带留下一个可用的小工具：`temp/cecil/`（net46，引用 BepInEx 的 Mono.Cecil），
+> 用 `./Dump.exe Assembly-CSharp.dll <类型名>` 就能列出任意游戏类型的字段/属性，
+> 以后查游戏内部结构不用再猜。
+
+## 2.2.11
+
+### 真根因：KKS 换人后没把卡里的饰品 `addMove` 写上去
+
+诊断数据（#278 + animfriend 07）：
+
+```
+[诊断] 01 ca_slot00 父级=cf_J_FaceUp_ty/a_n_headside/ca_slot00 动骨=26(启用0) 碰撞器=0 变换=(0,0,0)s(1,1,1)
+```
+
+而卡片里同一件饰品是：
+
+```
+01  addMove pos(0,-4.2,2.0)  rot(0,0,0)   scale(1.28,1.28,1.31)
+02  addMove pos(0,-0.7,3.6)  rot(0,0,0)   scale(1.20,1.32,1.71)
+03  addMove pos(0,-0.9,5.7)  rot(0,0,0)   scale(1.24,1.34,1.66)
+04  addMove pos(0, 1.4,-3.3) rot(2,0,0)   scale(1.08,0.93,1.23)
+```
+
+也就是说：**饰品的位置/旋转/缩放根本没被应用**，全部堆在父节点 `a_n_headside` 原点 →
+头发正好落在脸的坐标上。`UpdateAccessoryMoveAllFromInfo()` 在这张卡上救不回来。
+
+新增 `src/Game/AccessoryMoves.cs`：直接读 `ChaFileControl.coordinate[i].accessory.parts[slot].addMove`
+（反射，兼容 `Vector3[]` 与「结构体里 3 个 Vector3」两种排布），
+把 pos/rot/scl 写到 `ca_slotNN` 的 local 变换上。换人后写一次，开录前再写一次。
+
+日志：
+
+```
+[饰品] 槽 01 ← pos(0,-4.2,2) rot(0,0,0) scl(1.28,1.28,1.31)  [坐标 0]
+[饰品] 已按卡片重写 5 件饰品的位移/缩放
+```
+
+### 2.2.10 补充
+
+- 新增只读诊断 `[诊断]`：每件饰品的父级路径 / 动骨数 / 启用数 / 最大权重 / 碰撞器数 / 当前变换，
+  `DiagnoseAccessoryDynamics` 默认开（排查完会关掉）。
+- 结论：动骨停用（启用 0）且饰品无任何碰撞器时画面依旧异常 → 与物理无关。
+
+## 2.2.9
+
+### 正解：修「碰撞体误吸附饰品动骨」（不是删动骨）
+
+**根因**：`TurnOffDynamicBoneColliders()` 收集要登记的骨骼时用的是
+`ci.objAccessory` —— 这个数组在 KKS 里经常是 null（或只含当前可见槽），
+于是**饰品骨骼一条都没进忽略名单**，名单里只有衣服和头发，碰撞器就一直抓着饰品头发链。
+
+**修复**：
+
+- 新增 `AccessoryDynamics.CollectObjects(ChaControl, List<GameObject>)`：
+  按 `GetAccessoryComponent(slot)`（0–19）+ `ca_slot*` 名字兜底，把所有饰品根节点收全；
+- 骨骼收集改成「三个类型都收」：`DynamicBone`、`DynamicBone_Ver02`，再加**按类型名兜底**
+  （任何含 `DynamicBone` 且不含 `Collider` 的 `Behaviour`，类型不匹配时 Invoke 抛异常已被吞掉）；
+- 每个角色会打一条日志：`[碰撞体] 角色动骨 N 个（饰品对象 X 个 / 头发 Y / 衣服 Z）`，
+  可以直接确认饰品到底有没有被探测到。
+
+### 开关拆分（不再"关了一个另一个还在改场景"）
+
+| 开关 | 配置项 | 默认 | 作用 |
+|---|---|---|---|
+| 修复碰撞体误吸附饰品（推荐） | `FixColliderBinding` | **开** | 只补「忽略动骨」名单 + 停用补不上的碰撞体，**不动动骨** |
+| 关掉饰品动骨 | `KillAccessoryDynamics` | **关** | 硬手段：把饰品动骨 `enabled=false`，冻结成绑定姿势 |
+
+之前这两个行为是绑在一起的，所以「关掉饰品动骨」之后场景照样被动过。
+现在各自独立，两个都关 = 纯换人、不改任何物理设置。
+
+---
+
+## 2.2.8
+
+### 停用「碰撞体对象」本体（等价于手动删掉它）
+
+实测数据：2.2.6/2.2.7 里开录前日志已经是
+`[检查] 开录前仍启用的饰品动骨 0 个`、`饰品变换 01..05 全是 (0,0,0)@(0,0,0)`，
+但成片头发依旧不对；而手动在 Studio 里删掉 `[J694] Dynamic Bone Collider` 就正常。
+
+说明问题不在「动骨组件」也不在「饰品变换」，而在**那个碰撞体对象本身**
+（它没有 `DynamicBoneCollider` 组件 —— J694 插件已经不在本机，所以按组件找是 0 个）。
+
+现在 `SceneColliders.Suppress()` 增加第二遍：按**名字**找
+`Dynamic Bone Collider` / `DynamicBoneCollider` / `ダイナミックボーンコライダー`
+这类对象，直接 `SetActive(false)`，导出结束 `Restore()` 原样打开。
+日志：`[碰撞体] 已停用 N 个碰撞体对象（对象名…）`。
+
+### 2.2.7 补充（同批）
+
+- 换人后调用 `charInfo.UpdateAccessoryMoveAllFromInfo()`，按卡片重算饰品变换；
+- 开录前再算一次 + 打印前 5 个饰品槽的 localPosition/localEulerAngles（`[检查] 饰品变换 #1：…`），
+  方便对比“重算前 / 重算后”。
+
+---
+
+## 2.2.6
+
+### 修：2.2.5 的「关饰品动骨」在应用姿态后失效
+
+实测导出 #278 的成片，头发还是被拉进脸。查下来是执行时机问题：
+`应用时间轴姿态` 那一步会让游戏把饰品动骨**重新挂上**，2.2.5 只在「换人后 / 换装后」关过两次，
+等到真正开录时又活了。
+
+现在关 **三次**，并且最后一道就在开录前：
+
+1. 替换 female 收尾；
+2. 换装收尾（切套装会重建饰品）；
+3. 应用姿态 + 关碰撞体之后、`CaptureFrames` 之前（新增，带诊断日志）。
+
+开录前那句日志能直接看出有没有残留：
+`[检查] 开录前仍启用的饰品动骨 N 个 → 再关 M 个`。
+
+### 新增：硬关场景里的独立动骨碰撞体
+
+`[J694] Dynamic Bone Collider` 那类对象，原来的做法（KKPE 里逐个补 `ignoredDynamicBone`）
+对手写路径列表根本补不干净 —— 只要有一根骨头没覆盖到，头发照样被吸。
+
+新增 `src/Game/SceneColliders.cs`：导出时把所有**不属于角色**的 `DynamicBoneCollider\*`
+组件直接 `enabled=false`（角色自己的衣服/头发/身体碰撞器不动），导出结束在
+`ExitCinemaMode` 里原样还原。日志：`[碰撞体] 已硬关 N 个独立动骨碰撞体（对象名…）`。
+
+> 软（补忽略条目）+ 硬（关碰撞体）+ 关动骨，三层一起上；哪一层生效都不会再出现
+> “头发被吸进脸”。
+
+---
+
+## 2.2.5
+
+### 新增：换人后自动关闭「饰品动骨」（默认开）
+
+**问题**：从场景卡换上一张新角色卡后，01/02/03 这类**头发类饰品**（和部分耳朵饰品）
+会被拉进脸里、拽变形。原因是饰品 prefab 自带的 DynamicBone：
+
+- 换人时 `ChangeChara` 会重建整套饰品对象，动骨的骨骼引用/碰撞器按旧角色重建；
+- 场景卡里往往还存着一份**按骨骼全路径写的「忽略动骨」名单**
+  （例如 `[J694] Dynamic Bone Collider` 对象，由 KKSPE 的 `itemInfo` 保存，
+  里面写着 `.../ca_slot00/.../_yure_hair_h50_01` 这种条目）；
+- 新卡换上来的饰品骨链**名字/数量都不一样**，一条都不在这份名单里 →
+  原本被豁免的链全速模拟 → 头发往脸里收。
+
+删 J694 插件没用：名单不在插件里，在**场景对象**里。
+
+**处理**：新增配置 `[AutoExport] KillAccessoryDynamics`（默认 `true`），
+面板上对应「关掉饰品动骨（防头发被拉进脸）」勾选框。
+
+- 替换 female 之后关一次；
+- 如果导出时还切换了服装预设（饰品会整套重建、动骨复活），换装之后再关一次。
+- 只动 `ca_slotNN` 子树里的 `DynamicBone*` 组件（`DynamicBoneCollider` 保留），
+  本体头发 / 裙子 / 胸部动骨完全不动。
+- 关掉后饰品保持绑定姿势：稳定、可复现，批量导出不会因为「这张卡动骨崩了」废片。
+
+新增 `src/Game/AccessoryDynamics.cs`（枚举 `GetAccessoryComponent(slot)` + 按 `ca_slot*` 名字兜底扫描）。
+
+> 只想修某张卡、不导出时：Maker/Studio 里用 Dynamic Bone Editor 把该槽 Weight 设 0，
+> 或打开饰品的「不摇动」（卡里的 `noShake`），存盘后对所有场景生效。
+
+---
+
+## 2.2.4
+
+### 文件夹手势改成「Ctrl + 左键」（左键不再被右键行为抢）
+
+- 之前是右键点文件夹 = 整个目录一起勾选。但 Unity IMGUI 的 `GUI.Button` 对右键也会响应，
+  于是「右键全选」同时触发了「进入文件夹」——两个动作打架。
+- 现在：**左键 = 进目录；Ctrl + 左键 = 只切整个目录的勾选，不进去**；右键不再做任何事。
+  文件夹格子改成自己判 `Event.current`（`MouseDown` + `button == 0` + `control`），
+  不再用 `GUI.Button` 的返回值，所以不会再出现「点一下就进目录」的意外。
+- 角色卡选择器同步：**Ctrl + 左键文件夹 = 整目录加入次卡**（原来也是右键）。
+
+### 文件夹上显示「里面有选中的卡」
+
+- 目录里只要有卡片被勾选，就给文件夹图标描一圈框：**全选 = 绿框，部分选中 = 橙框**。
+- 角色卡选择器同理：目录里已经有卡加入次卡时描框，副标题从 `+N` 变成 `已加入/总数`
+  （例如 `3/12 张`）。统计结果按「目录树版本 + 次卡数量」缓存，不会每帧递归整棵树。
+
+### 关于「点导出时 ReShade 预设刷新」
+
+根因不是本插件写 ReShade 配置（插件对预设**只读**），而是：
+
+1. 导出第一步要加载场景卡 → CharaStudio 在场景加载时会重建交换链
+   （日志实测：`Redirecting IDXGISwapChain::ResizeBuffers(Width=2560, Height=1440)`）；
+2. ReShade 收到 resize 就重建整个 effect runtime → **把 151 个效果全部重新编译**
+   （日志实测：导出那一分钟出现 302 条 `Successfully compiled`）+ 重新应用预设；
+3. `PresetTransitionDuration=1000` 让这个过程变成「1 秒的渐变」，看起来就是预设被刷新、画面不稳。
+
+已在本机 `ReShade.ini` 调整（不属于插件改动，但配套写进文档）：
+
+```ini
+PresetTransitionDuration=0        ; 不再做 1 秒过渡，重建瞬间完成、不闪
+SkipLoadingDisabledEffects=1      ; 只编译预设里启用的效果（3~10 个），别每次编译 151 个
+```
+
+---
+
+## 2.2.3
+
+### 大图标再放大一档
+
+- 缩略图 96 → **132**，tile 116×142 → **152×196**（默认 1380 宽的面板一屏 4 列、4 行）。
+  名字字号 12 → 13。
+
+### 文件夹：左键进目录，右键整目录勾选
+
+- 场景卡列表里文件夹图标上的小方框去掉了 —— **左键只负责进去**，
+  不再有「点歪一点就变成勾选」的问题。
+- **右键文件夹 = 整个目录一起勾选 / 取消**（已经全选时右键取消）。文件夹下面那行
+  `5/12 张` 就是勾选进度，全选时变绿。
+- 角色卡选择器同理：**右键文件夹 = 整目录加入次卡**（原来右上角那个「+N」小按钮去掉，
+  它压在图标上不好点）。两个界面的手势统一成「左键进入 / 右键整目录」。
+
+### ReShade 预设相关
+
+- 导出前的预设检查不再「没启用 KK_BloomVignette 就报警」：
+  现在只报「当前预设叫什么、启用了几个效果、分别是哪些」，用了自己的预设也不会被刷警告。
+
+---
+
 ## 2.2.2
 
 ### 改成大图标视图（场景卡列表 + 角色卡选择器）

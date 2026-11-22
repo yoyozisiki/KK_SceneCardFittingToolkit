@@ -1,4 +1,4 @@
-KK_SceneCardFittingToolkit 2.2.2  移植说明
+KK_SceneCardFittingToolkit 2.2.3  移植说明
 =========================================
 
 【装哪里】
@@ -52,4 +52,4 @@ KK_SceneCardFittingToolkit 2.2.2  移植说明
     · 去码 / 去球 / 直出淡入淡出 / ReShade 泛光暗角（ReShade 参数只读不改）
 
 【版本】
-    2.2.2
+    2.2.3

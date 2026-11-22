@@ -105,7 +105,7 @@ namespace KKPEHeightLock
         {
             var sel = SceneCatalog.Find(_selectedPath);
             if (sel == null)
-                return L10n.T("点卡片 = 选中并勾选；点文件夹进入；右键文件夹 = 整个目录一起勾选");
+                return L10n.T("点卡片 = 选中并勾选；点文件夹进入；Ctrl+左键文件夹 = 整个目录一起勾选");
             string tl;
             try { tl = sel.TlSeconds > 0.01f ? "  ·  Timeline " + sel.TlSeconds.ToString("0.##") + "s" : ""; }
             catch (Exception) { tl = ""; }
@@ -218,23 +218,30 @@ namespace KKPEHeightLock
             bool all = totalCards > 0 && onCards == totalCards;
             bool some = onCards > 0 && !all;
 
-            // 左键只负责「进去」，勾选交给右键（见下），所以这里不再放可点的方框
-            if (GUI.Button(tile, GUIContent.none, _tile))
-                _pendingDir = name;
+            var e = Event.current;
+            bool hover = e != null && tile.Contains(e.mousePosition);
+            if (hover) TileGrid.Fill(tile, new Color(1f, 1f, 1f, 0.07f));
 
             var box = TileGrid.ThumbRect(tile);
             TileGrid.DrawFolderIcon(box);
+
+            // 目录里有卡片被勾选 → 给图标描一圈框（全选=绿，部分=橙），一眼能看出「这里面有选中的」
+            if (all)
+                TileGrid.DrawFrameColored(TileGrid.Grow(box, 3f), new Color(0.32f, 0.95f, 0.48f, 0.95f));
+            else if (some)
+                TileGrid.DrawFrameColored(TileGrid.Grow(box, 3f), new Color(1f, 0.70f, 0.22f, 0.95f));
+
             GUI.Label(TileGrid.NameRect(tile), name, _tileName);
             GUI.Label(TileGrid.SubRect(tile),
                 some ? (onCards + "/" + totalCards + L10n.T(" 张")) : (totalCards + L10n.T(" 张")),
                 all ? _tileSubOn : _tileSub);
 
-            // 右键 = 整个文件夹一起勾选/取消（全选就取消，否则全选）
-            var e = Event.current;
-            if (e != null && e.type == EventType.MouseDown && e.button == 1
+            // 左键 = 进目录；Ctrl+左键 = 只切整个目录的勾选，**不进去**
+            if (e != null && e.type == EventType.MouseDown && e.button == 0
                 && tile.Contains(e.mousePosition))
             {
-                SetFolderCheck(rel, !all);
+                if (e.control || e.command) SetFolderCheck(rel, !all);
+                else _pendingDir = name;
                 e.Use();
             }
         }

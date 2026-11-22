@@ -90,7 +90,7 @@ namespace KKPEHeightLock
                 ? L10n.T("搜索结果：") + _cardSearch
                 : (_cardDir == null || _cardDir == CardLibrary.Root ? L10n.T("根目录") : _cardDir.rel);
             GUILayout.Label(" " + where + "  (" + _cardView.Count + L10n.T(" 项)")
-                + (multi ? "    " + L10n.T("点卡片加入/移出（左上角数字=替换顺序）；右键文件夹 = 整目录加入") : ""), stLabelSm);
+                + (multi ? "    " + L10n.T("点卡片加入/移出（左上角数字=替换顺序）；Ctrl+左键文件夹 = 整目录加入") : ""), stLabelSm);
 
             // ---- 大图标网格
             _cardGridH = Mathf.Max(200f, _cardPickerRect.height - (multi ? 152f : 130f));
@@ -198,30 +198,73 @@ namespace KKPEHeightLock
             GUI.EndScrollView();
         }
 
+        // 文件夹的「已加入/总数」每帧都要画，逐帧递归太费 → 按版本缓存
+        private static int _statVerLib = -1, _statVerPool = -1;
+        private static readonly Dictionary<CardNode, int[]> _statCache = new Dictionary<CardNode, int[]>();
+
+        private static void PoolStat(CardNode node, out int inPool, out int total)
+        {
+            if (_statVerLib != CardLibrary.Version || _statVerPool != CardPool.Count)
+            {
+                _statCache.Clear();
+                _statVerLib = CardLibrary.Version;
+                _statVerPool = CardPool.Count;
+            }
+            int[] v;
+            if (!_statCache.TryGetValue(node, out v))
+            {
+                var all = CardLibrary.AllCards(node);
+                int n = 0;
+                for (int i = 0; i < all.Count; i++)
+                    if (CardPool.Contains(all[i])) n++;
+                v = new int[] { n, all.Count };
+                _statCache[node] = v;
+            }
+            inPool = v[0];
+            total = v[1];
+        }
+
         private static void DrawCardFolderTile(Rect tile, CardNode node, bool multi)
         {
-            // 左键 = 进目录（和场景卡列表一致）
-            if (GUI.Button(tile, GUIContent.none, AutoExportPanel.ThemeTile))
-            {
-                _cardDir = node;
-                _cardScroll = Vector2.zero;
-                _cardSearch = "";
-                _cardViewKey = null;
-            }
+            var e = Event.current;
+            bool hover = e != null && tile.Contains(e.mousePosition);
+            if (hover) TileGrid.Fill(tile, new Color(1f, 1f, 1f, 0.07f));
 
             var box = TileGrid.ThumbRect(tile);
             TileGrid.DrawFolderIcon(box);
+
+            // 多选模式下：目录里已经有卡加进次卡 → 描框（全加=绿，部分=橙）
+            int inPool = 0, inTotal = node.total;
+            if (multi && node.total > 0)
+            {
+                PoolStat(node, out inPool, out inTotal);
+                if (inPool > 0)
+                {
+                    bool full = inPool >= inTotal;
+                    TileGrid.DrawFrameColored(TileGrid.Grow(box, 3f),
+                        full ? new Color(0.32f, 0.95f, 0.48f, 0.95f)
+                             : new Color(1f, 0.70f, 0.22f, 0.95f));
+                }
+            }
+
             GUI.Label(TileGrid.NameRect(tile), node.name, AutoExportPanel.ThemeTileName);
             GUI.Label(TileGrid.SubRect(tile),
-                node.total + L10n.T(" 张") + (multi ? "   +" + node.total : ""),
+                node.total + L10n.T(" 张")
+                    + (multi ? (inPool > 0 ? "   " + inPool + "/" + inTotal : "   +" + node.total) : ""),
                 AutoExportPanel.ThemeTileSub);
 
-            // 右键 = 整目录加入次卡（多选模式）。和场景卡的「右键整目录勾选」同一个手势。
-            var e = Event.current;
-            if (multi && e != null && e.type == EventType.MouseDown && e.button == 1
+            // 左键 = 进目录；Ctrl+左键 = 整目录加入次卡（多选模式），**不进去**
+            if (e != null && e.type == EventType.MouseDown && e.button == 0
                 && tile.Contains(e.mousePosition))
             {
-                CardPool.AddFolder(node.path);
+                if (multi && (e.control || e.command)) CardPool.AddFolder(node.path);
+                else
+                {
+                    _cardDir = node;
+                    _cardScroll = Vector2.zero;
+                    _cardSearch = "";
+                    _cardViewKey = null;
+                }
                 e.Use();
             }
         }

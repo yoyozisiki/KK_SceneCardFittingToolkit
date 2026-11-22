@@ -2,7 +2,7 @@
 
 这里放的是**能直接覆盖进游戏根目录**的成品，不用再从别处东拼西凑。
 
-版本：**Scene Card Fitting Toolkit 2.2.2**（`BepInEx/plugins/kk_scenecardfittingtoolkit.dll`）
+版本：**Scene Card Fitting Toolkit 2.2.3**（`BepInEx/plugins/kk_scenecardfittingtoolkit.dll`）
 
 ## 怎么装
 
@@ -18,6 +18,8 @@
   BepInEx\plugins\Timeline.dll                     ← 读时间轴，必需
   KKReshade.addon                                  ← 改造版：ReShade 共享内存截图（导出效果要靠它）
   reshade\KK_BloomVignette.fx                      ← 泛光 + 暗角着色器
+  reshade-shaders\Shaders\                         ← 效果链要用的着色器（见下表）
+  reshade-shaders\Textures\                        ← 对应贴图
 ```
 
 `安装说明.txt` 里有更细的依赖版本要求和排错说明。
@@ -32,7 +34,8 @@
 | `KKSPE.dll` | 身高骨骼锁、关闭动态骨骼碰撞体吸附用到的类型 |
 | `Timeline.dll` | 读场景卡时间轴、逐帧驱动播放 |
 | `KKReshade.addon` | 改造版 addon：把 ReShade 处理后的画面通过共享内存递给截图插件（导出时泛光/暗角才能进成片）。原版备份在游戏目录的 `KKReshade.addon.orig-20261121` |
-| `reshade/KK_BloomVignette.fx` | 泛光 + 暗角效果，放到 `reshade-shaders/Shaders/` 下被 `KK_BloomVignette.ini` 预设引用 |
+| `reshade/KK_BloomVignette.fx` | 泛光 + 暗角效果，被 `reshade_ini/KK_BloomVignette.ini` 预设引用 |
+| `reshade-shaders/Shaders/` | `KK_BloomVignette.fx`（泛光暗角）、`AMD_Neural_Feed.fx` + `MartysMods_LAUNCHPAD.fx`（AMD 降噪链的运动矢量）、iMMERSE 免费版 6 个（MXAO / SMAA / SOLARIS / FILMGRAIN / SHARPEN）及 `MartysMods/*.fxh` 依赖 |
 
 ## 关于 git
 

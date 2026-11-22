@@ -129,11 +129,11 @@ namespace KKPEHeightLock
             KKPEHeightLockPlugin.ExportReplaceFemale.Value = GUILayout.Toggle(
                 KKPEHeightLockPlugin.ExportReplaceFemale.Value,
                 L10n.T("  替换所有 female（保留 male）"), _toggle, GUILayout.Height(28));
-            Rect togRect = GUILayoutUtility.GetLastRect();
+            Rect dynRect = GUILayoutUtility.GetLastRect();
             GUILayout.EndVertical();
             // 角色卡区高度 = 从标题顶部到 toggle 底边 + 面板上下内边距 8 + 与下面的 8 间隙
-            if (lblRect.height > 1f && togRect.height > 1f && togRect.yMax > lblRect.y)
-                _cardH = togRect.yMax - lblRect.y + 16f;
+            if (lblRect.height > 1f && dynRect.height > 1f && dynRect.yMax > lblRect.y)
+                _cardH = dynRect.yMax - lblRect.y + 16f;
 
             GUILayout.Space(8);
 

@@ -118,6 +118,37 @@ namespace KKPEHeightLock
             GUI.color = old;
         }
 
+        /// <summary>把矩形往外扩 d 像素（描边要比图标大一圈才好看）。</summary>
+        public static Rect Grow(Rect r, float d)
+        {
+            return new Rect(r.x - d, r.y - d, r.width + d * 2f, r.height + d * 2f);
+        }
+
+        /// <summary>半透明填充（hover 高亮）。</summary>
+        public static void Fill(Rect r, Color color)
+        {
+            var tex = AutoExportPanel.ThemeAccentTex;
+            if (tex == null) return;
+            var old = GUI.color;
+            GUI.color = color;
+            GUI.DrawTexture(r, tex);
+            GUI.color = old;
+        }
+
+        /// <summary>彩色描边 —— 文件夹里「有卡片被选中」时的强调框。</summary>
+        public static void DrawFrameColored(Rect r, Color color)
+        {
+            var tex = AutoExportPanel.ThemeAccentTex;
+            if (tex == null) return;
+            var old = GUI.color;
+            GUI.color = color;
+            GUI.DrawTexture(new Rect(r.x, r.y, r.width, 2f), tex);
+            GUI.DrawTexture(new Rect(r.x, r.yMax - 2f, r.width, 2f), tex);
+            GUI.DrawTexture(new Rect(r.x, r.y, 2f, r.height), tex);
+            GUI.DrawTexture(new Rect(r.xMax - 2f, r.y, 2f, r.height), tex);
+            GUI.color = old;
+        }
+
         /// <summary>彩色的编号角标（次角色卡的替换顺序）。</summary>
         public static void DrawBadge(Rect box, string text)
         {

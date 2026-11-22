@@ -26,6 +26,12 @@ namespace KKPEHeightLock
         /// </summary>
         private static IEnumerator ReplaceFemale(ExportOptions o)
         {
+            // **必须在换人之前**：KKPE 碰撞体的「Enable New Dynamic Bones」开着时，
+            // 一旦角色重建，新出现的动骨会被自动加进碰撞体的影响列表 → 饰品头发被吸走。
+            // 社区对 hongcha 场景的标准做法就是在 KKPE 高级模式里把这个开关取消掉。
+            try { ColliderBindingFix.DisableAutoAttachNewBones(); }
+            catch (Exception e) { Log("[提示] 关闭自动吸附新动骨失败：" + e.Message); }
+
             // 场景刚加载完时网格/材质还在构建，这时候 ChangeChara 会换不干净
             for (int i = 0; i < 6; i++) yield return null;
 
@@ -99,6 +105,12 @@ namespace KKPEHeightLock
                 {
                     var sceneBody = BodySnap.Capture(oci);
                     oci.ChangeChara(card);
+                    // 换人后 KKS 有时不会把卡里的 addMove（每件饰品的位置/旋转/缩放）应用上去：
+                    // #278 实测卡里 01 是 pos(0,-4.2,2)/scale(1.28)，换完人节点还是 (0,0,0)/1，
+                    // 于是所有饰品贴在父节点原点 → 头发直接糊在脸上。
+                    // UpdateAccessoryMoveAllFromInfo() 也救不回来，这里按卡自己写一遍。
+                    try { oci.charInfo.UpdateAccessoryMoveAllFromInfo(); }
+                    catch (Exception e1) { Log("重算饰品变换失败：" + e1.Message); }
                     // 换人只保证服装换掉，饰品槽的显隐会被原角色/AccStateSync 继承下来，
                     // 而不少卡把头发做成饰品（"Accessories: 01 lulum hair"）→ 成片光头。
                     // 所以换完先全部显示，卡片自己标了隐藏的再按卡还愿。
@@ -129,6 +141,9 @@ namespace KKPEHeightLock
             if (o.LockHeight)
                 for (int i = 0; i < swapped.Count; i++) BodySnap.LockHeight(swapped[i]);
 
+            // 最后一道：关掉饰品的动骨。
+            // 换人后新饰品的头发链会被场景里那套「按骨骼路径写的忽略名单 / 碰撞器」漏掉，
+            // 直接把链拉进脸里（#278 那种动态卡最典型）。关掉就固定成绑定姿势，稳定可复现。
             Log($"替换完成：{done} 个 female（主卡 {byMain} / 次卡 {bySub}）");
         }
 
@@ -484,7 +499,11 @@ namespace KKPEHeightLock
                     var parts = new List<GameObject>();
                     AddIfAny(parts, ci.objHair);
                     AddIfAny(parts, ci.objClothes);
-                    AddIfAny(parts, ci.objAccessory);
+                    // 饰品必须走 CollectObjects：KKS 里 objAccessory 常常是 null，
+                    // 用它会一条饰品骨骼都收不到 → 忽略名单里没有饰品 → 碰撞器继续抓饰品头发。
+                    int accBefore = parts.Count;
+                    CollectAccessoryObjects(ci, parts);
+                    int accCount = parts.Count - accBefore;
 
                     var bones = new List<object>();
                     for (int i = 0; i < parts.Count; i++)
@@ -493,8 +512,22 @@ namespace KKPEHeightLock
                         if (go == null) continue;
                         foreach (var d in go.GetComponentsInChildren<DynamicBone>(true)) bones.Add(d);
                         foreach (var d in go.GetComponentsInChildren<DynamicBone_Ver02>(true)) bones.Add(d);
+
+                        // 兜底：按类型名再收一遍（mod 自带的 DynamicBone 变体、
+                        // 以及上面两个类型没覆盖到的写法）。类型不匹配时 Invoke 会抛，已被 catch 掉。
+                        foreach (var b in go.GetComponentsInChildren<Behaviour>(true))
+                        {
+                            if (b == null) continue;
+                            string tn = b.GetType().Name;
+                            if (tn.IndexOf("DynamicBone", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                            if (tn.IndexOf("Collider", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                            if (!bones.Contains(b)) bones.Add(b);
+                        }
                     }
                     if (bones.Count == 0) { continue; }
+                    Log("[碰撞体] 角色动骨 " + bones.Count + " 个（饰品对象 " + accCount
+                        + " 个 / 头发 " + (ci.objHair != null ? ci.objHair.Length : 0)
+                        + " / 衣服 " + (ci.objClothes != null ? ci.objClothes.Length : 0) + "）");
 
                     for (int e = 0; e < editors.Count; e++)
                     {
@@ -521,6 +554,39 @@ namespace KKPEHeightLock
         }
 
         /// <summary>把数组里非空的 GameObject 收进列表（objHair / objClothes / objAccessory 用）。</summary>
+        /// <summary>
+        /// 收集一个角色所有饰品根节点。
+        /// 不能用 chaInfo.objAccessory：KKS 里它经常是 null（或只含可见槽），
+        /// 拿它遍历会一条饰品骨骼都收不到。
+        /// </summary>
+        private static void CollectAccessoryObjects(ChaControl ci, List<GameObject> into)
+        {
+            if (ci == null || into == null) return;
+            for (int slot = 0; slot < 20; slot++)
+            {
+                GameObject go = null;
+                try
+                {
+                    var comp = ci.GetAccessoryComponent(slot);
+                    if (comp != null) go = comp.gameObject;
+                }
+                catch (Exception) { }
+                if (go != null && !into.Contains(go)) into.Add(go);
+            }
+            try
+            {
+                var all = ci.transform.GetComponentsInChildren<Transform>(true);
+                for (int i = 0; i < all.Length; i++)
+                {
+                    var t = all[i];
+                    if (t == null || t.name.Length < 7) continue;
+                    if (!t.name.StartsWith("ca_slot", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!into.Contains(t.gameObject)) into.Add(t.gameObject);
+                }
+            }
+            catch (Exception) { }
+        }
+
         private static void AddIfAny(List<GameObject> list, GameObject[] arr)
         {
             if (arr == null) return;
@@ -740,6 +806,7 @@ namespace KKPEHeightLock
             for (int f = 0; f < 6; f++) yield return null;
             for (int i = 0; i < chars.Count; i++)
                 if (snaps[i] != null) BodySnap.Compose(chars[i], snaps[i], snaps[i], o);
+
         }
 
 
