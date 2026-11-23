@@ -248,6 +248,18 @@ namespace KKPEHeightLock
                 GUILayout.Width(180), GUILayout.Height(28));
             GUILayout.EndHorizontal();
 
+            // male 半透明：0 = 不处理；越小越透。作用到身体 + 服装 + 饰品。
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(L10n.T("male 透明度"), _label, GUILayout.Width(96), GUILayout.Height(24));
+            float maleA = KKPEHeightLockPlugin.ExportMaleAlpha.Value;
+            float maleNew = GUILayout.HorizontalSlider(maleA, 0f, 1f,
+                GUILayout.Width(180), GUILayout.Height(20));
+            if (Math.Abs(maleNew - maleA) > 0.001f)
+                KKPEHeightLockPlugin.ExportMaleAlpha.Value = maleNew;
+            GUILayout.Label(maleA < 0.01f ? L10n.T("不处理") : maleA.ToString("0.00"),
+                _labelSm, GUILayout.Width(64), GUILayout.Height(24));
+            GUILayout.EndHorizontal();
+
             GUILayout.EndScrollView();
 
             // 滚轮自己处理：这个游戏里 IMGUI 收不到 ScrollWheel（被 Studio 的相机缩放吃掉），

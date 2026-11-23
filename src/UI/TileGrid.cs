@@ -12,10 +12,24 @@ namespace KKPEHeightLock
     /// </summary>
     internal static class TileGrid
     {
-        public const float W = 152f;        // tile 宽
-        public const float H = 196f;        // tile 高（缩略图 132 + 名字两行 + 间隙）
-        public const float Thumb = 132f;    // 缩略图边长
+        /// <summary>
+        /// 缩略图边长。**可变** —— 场景卡列表想比卡片选择器大一点，
+        /// 绘制前把 Thumb 设大、画完恢复默认即可（W/H 会跟着算）。
+        /// </summary>
+        public static float Thumb = DefaultThumb;
+        public const float DefaultThumb = 132f;
+
+        public static float W { get { return Thumb + 20f; } }     // tile 宽
+        public static float H { get { return Thumb + 64f; } }     // tile 高（缩略图 + 名字两行 + 间隙）
         public const float Gap = 8f;
+
+        /// <summary>把缩略图边长切到指定值；传 0 恢复默认。</summary>
+        public static float SetThumb(float thumb)
+        {
+            float old = Thumb;
+            Thumb = thumb > 0f ? thumb : DefaultThumb;
+            return old;
+        }
 
         public static int Columns(float width)
         {
@@ -23,13 +37,21 @@ namespace KKPEHeightLock
             return Mathf.Max(1, Mathf.FloorToInt((width - Gap) / (W + Gap)));
         }
 
-        /// <summary>第 index 个 tile 的矩形（相对滚动内容原点，已含外边距）。</summary>
+        /// <summary>
+        /// 第 index 个 tile 的矩形（相对滚动内容原点，已含外边距）。
+        ///
+        /// 列宽**按可用宽度均分**，不再固定 W —— 固定宽度时最后一列右边会剩一大块空白
+        /// （窗口 1380 时 3 列只占 612，右边空 148）。
+        /// </summary>
         public static Rect Cell(int index, float width)
         {
             int cols = Columns(width);
-            int col = cols > 0 ? index % cols : 0;
-            int row = cols > 0 ? index / cols : 0;
-            return new Rect(Gap + col * (W + Gap), Gap + row * (H + Gap), W, H);
+            if (cols <= 0) cols = 1;
+            float cellW = (width - Gap) / cols;
+            if (cellW < 40f) cellW = 40f;
+            int col = index % cols;
+            int row = index / cols;
+            return new Rect(Gap + col * cellW, Gap + row * (H + Gap), cellW - Gap, H);
         }
 
         public static float ContentHeight(int count, float width)
@@ -43,17 +65,17 @@ namespace KKPEHeightLock
         /// <summary>缩略图区域（tile 内居中靠上）。</summary>
         public static Rect ThumbRect(Rect tile)
         {
-            return new Rect(tile.x + (W - Thumb) * 0.5f, tile.y + 6f, Thumb, Thumb);
+            return new Rect(tile.x + (tile.width - Thumb) * 0.5f, tile.y + 6f, Thumb, Thumb);
         }
 
         public static Rect NameRect(Rect tile)
         {
-            return new Rect(tile.x + 2f, tile.y + 6f + Thumb + 4f, W - 4f, 34f);
+            return new Rect(tile.x + 2f, tile.y + 6f + Thumb + 4f, tile.width - 4f, 34f);
         }
 
         public static Rect SubRect(Rect tile)
         {
-            return new Rect(tile.x + 2f, tile.y + 6f + Thumb + 38f, W - 4f, 16f);
+            return new Rect(tile.x + 2f, tile.y + 6f + Thumb + 38f, tile.width - 4f, 16f);
         }
 
         /// <summary>左上角的小方框（勾选/全选），返回它占的矩形。</summary>

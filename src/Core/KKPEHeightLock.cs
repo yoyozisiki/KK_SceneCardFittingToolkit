@@ -23,7 +23,7 @@ namespace KKPEHeightLock
     {
         public const string GUID = "com.kkpeheightlock";
         public const string PluginName = "Scene Card Fitting Toolkit";
-        public const string Version = "2.3.1";
+        public const string Version = "2.4.0";
 
         internal static ManualLogSource Log;
         internal static KKPEHeightLockPlugin Instance;
@@ -90,6 +90,10 @@ namespace KKPEHeightLock
         internal static ConfigEntry<bool> ExportUncapFps;
         internal static ConfigEntry<int> ExportStartupDelay;
         internal static ConfigEntry<float> ExportReplaceSettle;
+        /// <summary>male 半透明：0 = 不处理，0~1 = 透明度（越小越透）。</summary>
+        internal static ConfigEntry<float> ExportMaleAlpha;
+        /// <summary>全局 female 皮肤卡（相对 UserData 或绝对路径；空 = 不应用）。</summary>
+        internal static ConfigEntry<string> ExportGlobalSkinCard;
 
         private void Awake()
         {
@@ -176,7 +180,8 @@ namespace KKPEHeightLock
             ExportShapeFromScene = Config.Bind("AutoExport", "ShapeFromScene", false,
                 "体型 44 个滑块取自场景原角色（关 = 用角色卡自己的）。");
             ExportBustFromScene = Config.Bind("AutoExport", "BustFromScene", false,
-                "乳量（大小+乳摇物理）取自场景原角色（关 = 用角色卡自己的）。");
+                "乳量（大小+乳摇物理）取自场景原角色。\n"
+                + "⚠ 只有「体型也取自场景」时才生效：体型用角色卡时，场景的乳摇参数和卡的身体不匹配，会胸腔塌陷。");
             ExportBoneFromScene = Config.Bind("AutoExport", "BoneFromScene", false,
                 "骨架类型 typeBone 取自场景原角色（关 = 用角色卡自己的）。");
             ExportLockHeight = Config.Bind("AutoExport", "LockHeight", true,
@@ -185,6 +190,15 @@ namespace KKPEHeightLock
                 "导出前去掉场景里的马赛克/圣光材质。");
             ExportRemoveSpheres = Config.Bind("AutoExport", "RemoveSpheres", true,
                 "导出前隐藏场景里的无用辅助球。");
+            ExportGlobalSkinCard = Config.Bind("AutoExport", "GlobalSkinCard",
+                "chara/female/151579669_p3.png",
+                "全局 female 皮肤卡：替换 female 之后，把这张卡的 face + body（皮肤/五官）套给所有 female。\n"
+                + "填相对 UserData 的路径（如 chara/female/xxx.png）或绝对路径；留空 = 不应用。\n"
+                + "体型不会被这张卡覆盖（应用前拍快照，应用后还原）。");
+            ExportMaleAlpha = Config.Bind("AutoExport", "MaleAlpha", 0.35f,
+                new ConfigDescription("male（男性角色）的透明度：0 = 不处理，0.35 = 半透明，1 = 不透明。\n"
+                    + "会同时作用于 male 的身体、服装和饰品（换成透明 shader + alpha 混合）。",
+                    new AcceptableValueRange<float>(0f, 1f)));
             ExportMinSeconds = Config.Bind("AutoExport", "MinSeconds", 5f,
                 "时长下限（秒）。卡里的 Timeline 比这个长就按 Timeline 录；"
                 + "没 Timeline 或 Timeline 比这个短，就录这么久（短卡循环补齐）。");

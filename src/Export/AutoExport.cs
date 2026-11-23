@@ -25,6 +25,9 @@ namespace KKPEHeightLock
         public static bool Running { get; private set; }
         public static bool CancelRequested { get; private set; }
 
+        /// <summary>当前是预览（只替换不录制），UI 用它改文案。</summary>
+        public static bool PreviewMode { get; private set; }
+
         /// <summary>
         /// 暂停中（ESC 切换）。暂停时整条流水线停在原地等，随时可以继续：
         ///   · 正在录的那张卡会被**放弃重录** —— ffmpeg 的管道已经开了，
@@ -295,6 +298,7 @@ namespace KKPEHeightLock
             CancelRequested = false;
             Paused = false;
             _pauseInterrupt = false;
+            PreviewMode = false;
             Running = true;
             _suppressGui = opts.RealtimeFx;
             // 走 ReShade 通路时截的是最终画面，必须先把整屏清干净
@@ -310,12 +314,111 @@ namespace KKPEHeightLock
             return true;
         }
 
+        /// <summary>
+        /// 停止：**立刻中断**，不再往下做。
+        ///
+        /// 语义（和暂停的区别）：
+        ///   · 暂停 = 停在原地，随时可以继续；正在录的那张卡丢弃重录，已录好的片段保留。
+        ///   · 停止 = 不再继续。正在换人/换装 → 下一个检查点立刻退出，不再替换；
+        ///     正在录制 → 让 VideoExport 收尾（管道不能硬切），当前这张丢弃，已完成的合并。
+        /// </summary>
         public static void Cancel()
         {
             if (!Running) return;
             CancelRequested = true;
-            Log(Paused ? "已请求停止：从暂停里直接退出（已录好的片段会保留并合并）"
-                       : "已请求停止：当前这张卡录完就停");
+            Paused = false;    // 从暂停里点停止也要能继续往下走，否则会卡在等待循环
+            // 正在录就把这张卡标记成「半成品」，CaptureFrames 见到标记会收尾退出
+            try { if (VeCtl.IsRecording) _pauseInterrupt = true; }
+            catch (Exception) { }
+            Log("已请求停止：立刻中断当前流程（正在录的这张丢弃，已录好的片段会保留并合并）");
+        }
+
+        /// <summary>
+        /// 预览：切到勾选的第一个场景，走完和导出**完全一样**的准备流程
+        /// （加载 → 替换 female → 换装 → 姿态 → 碰撞体 → 去码 → 去遮挡物 → 等物理稳定），
+        /// 但**不调用 VideoExport 录制**、也不隐藏界面。用来在正式导出前确认效果。
+        /// </summary>
+        public static bool StartPreview(MonoBehaviour host, ExportOptions opts)
+        {
+            if (Running) return false;
+            if (opts == null || opts.Scenes == null || opts.Scenes.Count == 0)
+            {
+                Log("没有勾选任何场景卡");
+                return false;
+            }
+            _host = host;
+            if (_host == null)
+            {
+                Log("拿不到 MonoBehaviour，无法启动协程");
+                return false;
+            }
+            opts.PreviewOnly = true;
+            CancelRequested = false;
+            Paused = false;
+            _pauseInterrupt = false;
+            PreviewMode = true;
+            Running = true;
+            _suppressGui = false;      // 预览绝不隐藏界面
+            Segments.Clear();
+            Failures.Clear();
+            MergedOutput = null;
+            CurrentIndex = 1;
+            TotalCount = 1;
+            Progress = 0f;
+            lock (_logLock) _log.Clear();
+            _host.StartCoroutine(RunPreview(opts));
+            return true;
+        }
+
+        /// <summary>
+        /// 确保皮肤材质缓存存在（预览和批量都要先调）。
+        ///
+        /// 拿模板卡材质本来只能 `Studio.AddFemale` 临时加载一个角色，而那个动作会重建
+        /// 场景对象、冲掉隐藏角色的显隐。所以只在**缓存不存在**时做一次，提取完存到
+        /// `BepInEx/config/SkinCache/*.bin`，之后每张卡只读文件，完全不碰场景。
+        /// </summary>
+        private static IEnumerator EnsureSkinCache(ExportOptions o)
+        {
+            if (string.IsNullOrEmpty(o.GlobalSkinCard)) yield break;
+
+            SetPhase("准备皮肤材质缓存…");
+            if (SkinMaterialCache.HasCache(o.GlobalSkinCard))
+            {
+                Log("[皮肤] 已有本地缓存，跳过提取");
+                yield break;
+            }
+
+            Log("[皮肤] 首次使用，正在从角色卡提取材质（会临时加载一次模板角色）…");
+            IEnumerator prep = SkinMaterialCache.EnsureCache(o.GlobalSkinCard);
+            while (prep.MoveNext()) yield return prep.Current;
+            yield return null;
+        }
+
+        private static IEnumerator RunPreview(ExportOptions o)
+        {
+            string scene = o.Scenes[0];
+            CurrentSceneName = Path.GetFileNameWithoutExtension(scene);
+            Log($"==== 预览：{CurrentSceneName}（只替换不录制）====");
+            Log($"参数与导出一致：替换 female={Yn(o.ReplaceFemale)}，去码={Yn(o.Decensor)}，"
+                + $"去球={Yn(o.RemoveSpheres)}，服装槽={o.Outfit}");
+
+            IEnumerator warm = WaitStudioReady();
+            while (warm.MoveNext()) yield return warm.Current;
+
+            // 预览也要先把皮肤缓存准备好（否则 ApplyToAll 只会报"缓存为空"）
+            IEnumerator skinWarm = EnsureSkinCache(o);
+            while (skinWarm.MoveNext()) yield return skinWarm.Current;
+
+            bool ok = false;
+            IEnumerator one = ExportOne(o, scene, null, 1, 0,
+                delegate(string p) { ok = !string.IsNullOrEmpty(p); });
+            while (one.MoveNext()) yield return one.Current;
+
+            Progress = 1f;
+            if (!ok) Log("[预览] 没有走完准备流程，看看上面的日志");
+            SetPhase(ok ? "预览完成：场景已替换，可以手动播放检查" : "预览结束（未完成）");
+            Log("==== 预览结束（未录制）====");
+            Finish();
         }
 
         // ============================================================ 主流程
@@ -331,6 +434,7 @@ namespace KKPEHeightLock
 
             Log($"==== 开始批量导出：{o.Scenes.Count} 张场景卡 ====");
             Log($"输出目录：{root}");
+            LogMemory("批量开始");
             Log($"参数：{o.Fps}fps，时长=按 Timeline / 下限 {o.MinSeconds:0.##}s（短卡补齐）"
                 + $"，头尾各 {o.FadeSeconds:0.##}s 淡入淡出（直出）"
                 + $"，去码={Yn(o.Decensor)}，去球={Yn(o.RemoveSpheres)}，替换 female={Yn(o.ReplaceFemale)}");
@@ -346,6 +450,10 @@ namespace KKPEHeightLock
             // 表现就是「画面是亮的但一直在变」，第一张永远做不成。
             IEnumerator warm = WaitStudioReady();
             while (warm.MoveNext()) yield return warm.Current;
+
+            // ---- 皮肤材质缓存（只在缓存不存在时做一次）
+            IEnumerator skinPrepRun = EnsureSkinCache(o);
+            while (skinPrepRun.MoveNext()) yield return skinPrepRun.Current;
 
             // 注意这里用 while 而不是 for：被暂停打断的那张卡要**原地重录**，
             // 所以下标不能自增（见下面 _pauseInterrupt 分支）。
@@ -366,6 +474,7 @@ namespace KKPEHeightLock
                 CurrentSceneName = Path.GetFileNameWithoutExtension(scene);
                 Progress = (float)i / o.Scenes.Count;
                 Log($"---- [{i + 1}/{o.Scenes.Count}] {CurrentSceneName} ----");
+                LogMemory("开卡前");
 
                 _pauseInterrupt = false;
                 int attempt = 0;
@@ -420,6 +529,11 @@ namespace KKPEHeightLock
                 // 时间轴会一直冻着（用户回 Studio 手动播放也没反应）。
                 HoldTimeline = false;
                 i++;
+
+                // 录完一张就清一次资源（见 CleanupAfterCard 的注释：
+                // Studio 换场景不释放旧卡的贴图/网格/材质，不手动清就会累积到 OOM）。
+                IEnumerator cleanup = CleanupAfterCard();
+                while (cleanup.MoveNext()) yield return cleanup.Current;
             }
 
             // 收尾：合并
@@ -491,6 +605,7 @@ namespace KKPEHeightLock
         private static void Finish()
         {
             Running = false;
+            PreviewMode = false;
             CancelRequested = false;
             Paused = false;
             _pauseInterrupt = false;
@@ -501,6 +616,54 @@ namespace KKPEHeightLock
         }
 
         private static string Yn(bool b) { return b ? "开" : "关"; }
+
+        /// <summary>
+        /// 打一行内存用量。批量导出时用来盯泄漏：Unity 侧（贴图/网格/材质）和托管堆分开看。
+        /// </summary>
+        internal static void LogMemory(string tag)
+        {
+            try
+            {
+                long total = 0, reserved = 0, mono = 0;
+                try { total = UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong(); }
+                catch (Exception) { }
+                try { reserved = UnityEngine.Profiling.Profiler.GetTotalReservedMemoryLong(); }
+                catch (Exception) { }
+                try { mono = GC.GetTotalMemory(false); }
+                catch (Exception) { }
+                Log($"[内存] {tag}：Unity 已用 {total / 1048576}MB / 保留 {reserved / 1048576}MB"
+                    + $"，托管堆 {mono / 1048576}MB");
+            }
+            catch (Exception) { }
+        }
+
+        /// <summary>
+        /// 一张卡录完后的清理。
+        ///
+        /// 这是批量导出 OOM 闪退的主因：Studio 换场景只会销毁场景里的对象，
+        /// **不会**释放旧卡的贴图/网格/材质实例 —— Unity 的 asset 只有
+        /// `Resources.UnloadUnusedAssets()` 才会真正回收。一张 hongcha 卡解出来
+        /// 就是几十 MB 贴图 + 上千个材质实例，连做十几张就吃满 32G。
+        /// </summary>
+        private static IEnumerator CleanupAfterCard()
+        {
+            // 先走一帧：Destroy 的对象在帧末才真正断开引用
+            yield return null;
+
+            AsyncOperation op = null;
+            try { op = Resources.UnloadUnusedAssets(); }
+            catch (Exception e) { Log("[清理] UnloadUnusedAssets 调用失败：" + e.Message); }
+            if (op != null)
+            {
+                // 它是异步的，必须等它跑完，否则下一张卡加载时旧资源还在
+                while (!op.isDone) yield return null;
+            }
+
+            // 托管堆：Material 名字/属性名这些字符串只在 GC 时回收
+            try { GC.Collect(); } catch (Exception) { }
+
+            LogMemory("卡间清理后");
+        }
 
         /// <summary>
         /// 取文件名做日志。不能用裸的 Path.GetFileName：cfg 里的路径可能带着被转义

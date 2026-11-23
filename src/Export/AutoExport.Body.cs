@@ -53,6 +53,36 @@ namespace KKPEHeightLock
                 }
                 catch (Exception e) { Log("读取体型失败：" + e.Message); return null; }
             }
+            /// <summary>
+            /// 换装后把体型/乳量**原样恢复**成换装前那一份（不套 ShapeFromScene / BustFromScene 配置）。
+            ///
+            /// 为什么不复用 Compose：ApplyClothes 里的快照是「换装前」的，而那时
+            /// ReplaceFemale 已经按配置处理过一遍了；再走 Compose 的 BustFromScene 分支，
+            /// 会拿这份快照当「场景值」二次覆盖 —— 表现就是乳量被改回角色卡的值。
+            /// 换装本身不该改变体型/乳量，所以这里直接按快照还原。
+            /// </summary>
+            public static void RestoreAll(Studio.OCIChar oci, BodySnap snap)
+            {
+                if (!IsFemale(oci) || snap == null || snap.shape == null) return;
+                try
+                {
+                    var b = oci.charInfo.fileBody;
+                    if (b == null) return;
+
+                    if (b.shapeValueBody != null && b.shapeValueBody.Length == snap.shape.Length)
+                        Array.Copy(snap.shape, b.shapeValueBody, snap.shape.Length);
+                    else
+                        b.shapeValueBody = (float[])snap.shape.Clone();
+
+                    b.bustSoftness = snap.softness;
+                    b.bustWeight = snap.weight;
+
+                    oci.charInfo.UpdateShapeBodyValueFromCustomInfo();
+                    // SetCoordinateInfo 内部调过 UpdateBustSoftnessAndGravity()，这里再刷一次
+                    try { oci.charInfo.UpdateBustSoftnessAndGravity(); } catch (Exception) { }
+                }
+                catch (Exception e) { Log("恢复体型失败：" + e.Message); }
+            }
 
             /// <summary>
             /// 按三个维度把「角色卡」和「场景原角色」的体型合成一份写回。
@@ -72,7 +102,9 @@ namespace KKPEHeightLock
                     if (o.ShapeFromScene && scene.shape != null && scene.shape.Length == merged.Length)
                         merged = (float[])scene.shape.Clone();
 
-                    if (o.BustFromScene)
+                    bool bustFromScene = o.BustFromScene;
+
+                    if (bustFromScene)
                     {
                         if (scene.shape != null)
                             for (int i = 0; i < BustIdx.Length; i++)
@@ -96,8 +128,9 @@ namespace KKPEHeightLock
                     else b.shapeValueBody = (float[])merged.Clone();
 
                     b.typeBone = o.BoneFromScene ? scene.typeBone : card.typeBone;
-                    b.bustSoftness = o.BustFromScene ? scene.softness : card.softness;
-                    b.bustWeight = o.BustFromScene ? scene.weight : card.weight;
+                    // 物理参数同样跟体型同源（bustFromScene 上面已经算过）
+                    b.bustSoftness = bustFromScene ? scene.softness : card.softness;
+                    b.bustWeight = bustFromScene ? scene.weight : card.weight;
 
                     oci.charInfo.UpdateShapeBodyValueFromCustomInfo();
                     oci.charInfo.UpdateBustSoftnessAndGravity();

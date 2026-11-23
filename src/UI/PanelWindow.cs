@@ -157,21 +157,31 @@ namespace KKPEHeightLock
 
             GUI.Label(new Rect(x, y, 72f, RowH), L10n.T("输出目录"), _label);
 
-            const float AccentW = 240f, DefW = 64f;
+            const float AccentW = 210f, DefW = 56f, PreviewW = 92f;
             float right = x + w;
             float fieldX = x + 76f;
-            float fieldW = Mathf.Max(80f, right - AccentW - DefW - 8f - fieldX);
+            float fieldW = Mathf.Max(80f, right - AccentW - PreviewW - DefW - 12f - fieldX);
 
             string dir = PathFix.Read(KKPEHeightLockPlugin.ExportOutputDir.Value);
             string nd = GUI.TextField(new Rect(fieldX, y, fieldW, RowH), dir, _field);
             if (nd != dir) KKPEHeightLockPlugin.ExportOutputDir.Value = PathFix.ToConfig(nd);
 
-            if (GUI.Button(new Rect(right - AccentW - DefW - 4f, y, DefW, RowH), L10n.T("默认"), _btn))
+            if (GUI.Button(new Rect(right - AccentW - PreviewW - DefW - 8f, y, DefW, RowH),
+                    L10n.T("默认"), _btn))
                 KKPEHeightLockPlugin.ExportOutputDir.Value = "";
 
-            bool veReady = AutoExport.VeCtl.Ready;
+            // 预览：先切场景 + 走完替换 female 的整套流程，但不调 VideoExport 录制、
+            // 也不隐藏界面。所以它**不需要** VideoExport 就绪。
+            bool busy = AutoExport.Running;
             bool old = GUI.enabled;
-            GUI.enabled = veReady && SceneCatalog.CheckedCount > 0;
+            GUI.enabled = !busy && SceneCatalog.CheckedCount > 0;
+            if (GUI.Button(new Rect(right - AccentW - PreviewW - 4f, y, PreviewW, RowH),
+                    L10n.T("预览"), _btn))
+                StartPreview();
+            GUI.enabled = old;
+
+            bool veReady = AutoExport.VeCtl.Ready;
+            GUI.enabled = !busy && veReady && SceneCatalog.CheckedCount > 0;
             if (GUI.Button(new Rect(right - AccentW, y, AccentW, RowH),
                     L10n.T("开始导出（") + SceneCatalog.CheckedCount + L10n.T(" 张）"), _btnAccent))
                 StartExport();
@@ -181,13 +191,15 @@ namespace KKPEHeightLock
             string hint = string.IsNullOrEmpty(outDir)
                 ? L10n.T("留空 = UserData/VideoExport/AutoExport")
                 : outDir;
-            if (!veReady) hint = L10n.T("未找到 VideoExport，导出不可用");
+            if (!veReady) hint = L10n.T("未找到 VideoExport，只能预览、不能导出");
+            if (SceneCatalog.CheckedCount > 0)
+                hint += L10n.T("　·　预览只替换不录制，用来看效果");
             GUI.Label(new Rect(x, y + RowH + 3f, w, 20f), hint, _labelSm);
         }
 
         private static void DrawRunning()
         {
-            GUILayout.Label(L10n.T("正在导出"), _section);
+            GUILayout.Label(AutoExport.PreviewMode ? L10n.T("正在预览（不录制）") : L10n.T("正在导出"), _section);
             GUILayout.Space(4);
             GUILayout.Label(L10n.T("场景 ") + AutoExport.CurrentIndex + " / " + AutoExport.TotalCount
                 + "　" + AutoExport.CurrentSceneName, _labelBold);
@@ -234,6 +246,19 @@ namespace KKPEHeightLock
         private static void StartExport()
         {
             StartExport(SceneCatalog.CheckedPaths());
+        }
+
+        /// <summary>
+        /// 预览第一张勾选的场景：切过去 + 走完替换 female 的整套流程，但不录制。
+        /// 勾了多张时只预览第一张（顺序就是列表里的顺序）。
+        /// </summary>
+        private static void StartPreview()
+        {
+            var paths = SceneCatalog.CheckedPaths();
+            if (paths == null || paths.Count == 0) return;
+            var one = new System.Collections.Generic.List<string>();
+            one.Add(paths[0]);
+            ExportRequest.StartPreview(one);
         }
 
         /// <summary>按给定的卡列表开跑（勾选和测试入口都走这里）。参数组装在后端。</summary>

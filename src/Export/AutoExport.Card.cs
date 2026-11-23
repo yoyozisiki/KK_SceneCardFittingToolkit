@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 
@@ -17,9 +18,14 @@ namespace KKPEHeightLock
             string tag = "s" + index.ToString("000") + "_" + SafeName(Path.GetFileNameWithoutExtension(scenePath));
             // 被暂停打断后重录时换个目录（_r2、_r3…）：VideoExport 收尾时还在用旧目录，
             // 我们**不能**去删它（删了它自己会报 DirectoryNotFound），换个新目录最干净。
-            string segDir = Path.Combine(segRoot, attempt > 0 ? (tag + "_r" + (attempt + 1)) : tag);
-            try { Directory.CreateDirectory(segDir); }
-            catch (Exception e) { Log("建片段目录失败：" + e.Message); yield break; }
+            // 预览模式不录制，不需要建目录。
+            string segDir = null;
+            if (!o.PreviewOnly)
+            {
+                segDir = Path.Combine(segRoot, attempt > 0 ? (tag + "_r" + (attempt + 1)) : tag);
+                try { Directory.CreateDirectory(segDir); }
+                catch (Exception e) { Log("建片段目录失败：" + e.Message); yield break; }
+            }
 
             // 暂停中就先别开工（ESC 随时可能被按下）
             while (Paused && !CancelRequested) yield return null;
@@ -68,9 +74,20 @@ namespace KKPEHeightLock
             ScenePlayerModule.TimelinePause();
             for (int f = 0; f < 10; f++) yield return null;
 
+            // ---- 1-c) 角色光照亮度封顶 1.0
+            // 不是"全局光照"：Koikatsu 的 KKUSS/KKUTS 材质几乎只吃 CameraLightCtrl 里
+            // 那盏角色灯（LightCalc.light），场景地图灯影响很小。过曝基本都是这盏灯
+            // 被设到 1 以上（场景卡常见 2~8）。只压它，不动场景灯光和环境光。
+            SetPhase("限制角色光照…");
+            try { SceneTools.ClampCharacterLighting(0.9f); }
+            catch (Exception e) { Log("角色光照封顶失败：" + e.Message); }
+            yield return null;
+
             // ---- 2) 替换 female（含体型三维来源：体型滑块 / 乳量物理 / 骨架类型 / 身高）
-            // 主次角色卡：主卡只换第一个 female，其余按次卡列表（数字优先 / 随机）。
-            // 只选了次卡也照样替换 —— 这是「主角不用固定某一张卡」的用法。
+            // 主次角色卡：第一个显示的 female 换主卡，其余显示角色按次卡列表。
+            // 隐藏但 Timeline 会取消隐藏的（与上一个显示角色是前后关系）用同一张卡。
+            // 前后关系靠这个集合识别，替换和服装都用它，只读一次盘（TimelineReader 有缓存）。
+            HashSet<int> revealed = TimelineReader.ReadRevealedObjects(scenePath);
             bool hasMain = !string.IsNullOrEmpty(o.FemaleCard);
             bool hasSubs = o.SubCards != null && o.SubCards.Count > 0;
             bool didReplace = false;
@@ -78,7 +95,7 @@ namespace KKPEHeightLock
             {
                 SetPhase("替换 female：主卡 " + (hasMain ? NameOf(o.FemaleCard, false) : "（无）")
                     + " / 次卡 " + (hasSubs ? o.SubCards.Count + " 张" : "（无）"));
-                IEnumerator rep = ReplaceFemale(o);
+                IEnumerator rep = ReplaceFemale(o, revealed);
                 while (rep.MoveNext()) yield return rep.Current;
                 didReplace = true;
             }
@@ -87,10 +104,25 @@ namespace KKPEHeightLock
                 Log("[提示] 勾了「替换 female」但主卡和次卡都没选，跳过替换");
             }
 
+            // 停止：替换阶段被中断后，后面这些准备步骤一律不再做
+            if (CancelRequested) { HoldTimeline = false; yield break; }
+
             // ---- 2-b) 服装预设 / 部件状态（放在换人之后、体型已落定，所以先存后还）
             SetPhase("设置服装…");
-            IEnumerator cloth = ApplyClothes(o);
+            IEnumerator cloth = ApplyClothes(o, revealed);
             while (cloth.MoveNext()) yield return cloth.Current;
+
+            // ---- 2-b2) 全局 female 皮肤（face + body 材质）
+            // 从**本地缓存**应用，不再 AddFemale —— 缓存由批量开始时的
+            // SkinMaterialCache.EnsureCache 一次性生成，之后每张卡只读文件。
+            if (!string.IsNullOrEmpty(o.GlobalSkinCard))
+            {
+                SetPhase("应用全局皮肤…");
+                try { SkinMaterialCache.ApplyToAll(o.GlobalSkinCard); }
+                catch (Exception e) { Log("应用全局皮肤失败：" + e.Message); }
+                yield return null;
+                for (int f = 0; f < 3; f++) yield return null;
+            }
 
             // ---- 2-c) 人物全部弄完之后，才应用时间轴姿态 + 等物理稳定
             //
@@ -105,6 +137,8 @@ namespace KKPEHeightLock
             // 等多久：旧脚本（recorder.py `_replace_female`）换完人之后是
             // `_wait_responsive()` 等主线程闲下来 + 日志安静满 1 秒，再换装、去球、
             // 去码，前后好几秒才开录。这里用一个可配的固定等待（默认 3 秒）等价实现。
+            if (CancelRequested) { HoldTimeline = false; yield break; }
+
             if (didReplace)
             {
                 SetPhase("应用时间轴姿态…");
@@ -146,6 +180,42 @@ namespace KKPEHeightLock
                 try { SceneTools.DecensorScene(); }
                 catch (Exception e) { Log("去码失败：" + e.Message); }
                 yield return null;
+
+                // 去码只管材质（Pixelate / CensorEffectMat / blur_），碰不到两种东西：
+                //   1. 场景里独立摆放的「カプセル(通常)」胶囊遮挡道具；
+                //   2. Studio Text Plugin 生成的静态标题文字（"-Text Plugin:xxx"）。
+                // 这两类都会直接挡在画面上，所以跟去码一起清掉。
+                SetPhase("去遮挡物…");
+                try { SceneTools.RemoveObstructions(); }
+                catch (Exception e) { Log("去遮挡物失败：" + e.Message); }
+                yield return null;
+            }
+
+            // ---- 3-c0) 角色光照**再压一次**
+            // 换人 / 换装之后 CameraLightCtrl 会 Reflect() 把场景里保存的光照重新应用，
+            // 之前（1-c）压下去的值会被覆盖回去 —— 面板又变回 1.2 就是这么来的。
+            // 所以这里在角色全部处理完之后再压一次，之后不再有东西改它。
+            SetPhase("再次限制角色光照…");
+            try { SceneTools.ClampCharacterLighting(0.9f); }
+            catch (Exception e) { Log("角色光照再次封顶失败：" + e.Message); }
+            yield return null;
+
+            // ---- 3-c) ShadowPower 过曝抑制（ShadowPower < 0.85 会让浅色衣物整片白）
+            // 放在换人/换装之后：这时材质才是最终那一套。
+            // **不动 Addcolor**：那是角色作者调过的配色，不能被改。
+            SetPhase("抑制过曝（ShadowPower）…");
+            try { SceneTools.ClampKkussOverexposure(); }
+            catch (Exception e) { Log("过曝抑制失败：" + e.Message); }
+            yield return null;
+
+            // ---- 3-d) male 半透明（身体 + 服装 + 饰品）
+            // 放在去码之后：换 shader 会重置材质状态，先做完别的再动它。
+            if (o.MaleAlpha > 0f && o.MaleAlpha < 0.999f)
+            {
+                SetPhase("male 半透明…");
+                try { SceneTools.ApplyMaleTransparency(o.MaleAlpha); }
+                catch (Exception e) { Log("male 半透明失败：" + e.Message); }
+                yield return null;
             }
 
             // ---- 3-b) 等物理稳定（放在所有准备工作之后、开录之前）
@@ -163,6 +233,18 @@ namespace KKPEHeightLock
                     yield return new WaitForSeconds(settleSec);
                 }
                 Log($"[时序] 全部准备完成（换人/换装/碰撞体/去码）→ 等物理稳定 {settleSec:0.#}s → 开录");
+            }
+
+            // ---- 预览到此为止：替换/换装/姿态/碰撞体/去码都做完了，直接交回画面。
+            // 不调 VideoExport、不算时长、不隐藏界面。
+            if (o.PreviewOnly)
+            {
+                HoldTimeline = false;                       // 放开时间轴，用户可以自己播着看
+                try { ScenePlayerModule.TimelinePause(); } catch (Exception) { }
+                Log("[预览] 场景已按导出流程完成替换（未录制）");
+                SetPhase("预览完成：可以手动播放检查效果");
+                done("preview");
+                yield break;
             }
 
             // ---- 4) 算时长

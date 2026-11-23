@@ -164,6 +164,10 @@ namespace KKPEHeightLock
         // ---------------------------------------------------------------- 网格
         private static void DrawSceneGrid(Rect view)
         {
+            // 场景卡缩略图用更大的边长（卡片选择器仍是默认 132），画完恢复。
+            float oldThumb = TileGrid.SetThumb(176f);
+            try
+            {
             GUI.Box(view, GUIContent.none, _panel);
 
             int total = _viewFolders.Count + _viewCards.Count;
@@ -207,6 +211,8 @@ namespace KKPEHeightLock
                 _pendingDir = null;
                 EnterSceneFolder(dir);
             }
+            }
+            finally { TileGrid.Thumb = oldThumb; }
         }
 
         private static void DrawSceneFolderTile(Rect tile, string name)

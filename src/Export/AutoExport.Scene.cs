@@ -11,11 +11,106 @@ namespace KKPEHeightLock
 {
     public static partial class AutoExport
     {
+        // ======================================================== 角色槽位
+        /// <summary>一个 female 对象，以及它在这一张卡里的角色（显示 / 前卡关系 / 真隐藏）。</summary>
+        private sealed class FemaleSlot
+        {
+            public int Key;                 // dicObjectCtrl 的对象编号（运行时 key）
+            public int TlIndex;             // 在「按 key 排序的对象列表」里的下标（仅诊断用）
+            public Studio.OCIChar Oci;
+            public bool Visible;            // 当前帧是否显示（眼睛图标）
+            public bool InTimeline;         // 这个角色在 timeline 里出现过（任何通道）
+        }
+
+        /// <summary>
+        /// 构建「运行时对象 → Timeline objectIndex」的映射（仅诊断/兜底用）。
+        ///
+        /// Timeline 卡里的 objectIndex 是
+        /// <c>new SortedDictionary&lt;int, ObjectCtrlInfo&gt;(dicObjectCtrl).ToList()</c>
+        /// 的下标，不是 dicObjectCtrl 的 key。这个映射只用来在日志里显示对照关系，
+        /// 以及运行时数据读不到时做兜底。
+        /// </summary>
+        private static Dictionary<Studio.ObjectCtrlInfo, int> BuildTimelineIndexMap(Studio.Studio studio)
+        {
+            var map = new Dictionary<Studio.ObjectCtrlInfo, int>();
+            if (studio == null || studio.dicObjectCtrl == null) return map;
+            try
+            {
+                var sorted = new SortedDictionary<int, Studio.ObjectCtrlInfo>(studio.dicObjectCtrl);
+                int i = 0;
+                foreach (var kv in sorted) map[kv.Value] = i++;
+            }
+            catch (Exception e) { Log("构建 Timeline 对象下标映射失败：" + e.Message); }
+            return map;
+        }
+
+        /// <summary>这个对象在 Timeline 里的 objectIndex；找不到返回 -1。</summary>
+        private static int TimelineIndexOf(Dictionary<Studio.ObjectCtrlInfo, int> map, Studio.ObjectCtrlInfo oci)
+        {
+            int idx;
+            return map != null && oci != null && map.TryGetValue(oci, out idx) ? idx : -1;
+        }
+
+        /// <summary>
+        /// 从「当前已加载的 Timeline 插件」读出**在 timeline 里出现过的**真实对象（按 OCI 引用）。
+        ///
+        /// 为什么看「所有通道」而不是只看 objectEnabled：
+        /// 换装卡把角色移进移出画面靠的是 guideObjectPos / guideObjectRot（位置动画），
+        /// 甚至 bonePos / 表情曲线，不一定有 objectEnabled。hongcha #06 就是典型：
+        /// 9 个 female 里只有 1 个有 objectEnabled 通道，其余全靠位置和骨骼动画。
+        /// 只要某个 female 在 timeline 里有任何插值项，它就是换装链路的一环。
+        ///
+        /// 返回 null 表示读不到（Timeline 没装 / 没加载时间轴），调用方再回退到
+        /// 文件解析 + 排序下标的方案。
+        /// </summary>
+        private static HashSet<Studio.ObjectCtrlInfo> GetTimelineOcis()
+        {
+            try
+            {
+                var all = global::Timeline.Timeline.GetAllInterpolables(false);
+                if (all == null) return null;
+                var set = new HashSet<Studio.ObjectCtrlInfo>();
+                foreach (var item in all)
+                {
+                    var ip = item as global::Timeline.Interpolable;
+                    if (ip == null || ip.oci == null) continue;
+                    set.Add(ip.oci);
+                }
+                return set;
+            }
+            catch (Exception e) { Log("[诊断] 读 Timeline 运行时对象失败：" + e.Message); return null; }
+        }
+
+        /// <summary>
+        /// 建一个「角色 → 是否在 timeline 里出现过」的判定器。优先用 Timeline 运行时数据
+        /// （按对象引用，最准）；读不到再回退到场景卡文件解析出的下标集合 + 排序映射。
+        /// </summary>
+        private static Func<Studio.ObjectCtrlInfo, bool> BuildTimelinePredicate(HashSet<int> revealed)
+        {
+            var viaRuntime = GetTimelineOcis();
+            if (viaRuntime != null)
+            {
+                Log($"[诊断] Timeline 里出现过的对象数={viaRuntime.Count}（按对象引用直接判定）");
+                return delegate(Studio.ObjectCtrlInfo oci)
+                {
+                    return oci != null && viaRuntime.Contains(oci);
+                };
+            }
+            var studio = UnityEngine.Object.FindObjectOfType<Studio.Studio>();
+            var indexMap = BuildTimelineIndexMap(studio);
+            Log($"[诊断] 回退到下标映射：timeline 下标=[{string.Join(",", revealed)}]，场景对象数={indexMap.Count}");
+            return delegate(Studio.ObjectCtrlInfo oci)
+            {
+                int idx = TimelineIndexOf(indexMap, oci);
+                return idx >= 0 && revealed.Contains(idx);
+            };
+        }
+
         // ======================================================== 替换 female
         /// <summary>
         /// 角色是不是「显示中」（工作室树里的眼睛图标开着）。
-        /// 隐藏的 female 不参与替换：它们多半是摆着当背景/占位、或压根不该出片的，
-        /// 换掉它们既浪费卡，又会把主卡/次卡的分配顺序挤乱（本该露脸的角色被顶到后面）。
+        /// 这只是「当前帧的可见状态」，不代表角色全程不出片：Timeline 会在某些帧把
+        /// 隐藏角色取消隐藏（与上一个显示角色是前后关系），那类角色由 ReplaceFemale 按前卡规则处理。
         ///
         /// 判据（眼睛图标关掉时两条会同时变 false）：
         ///   · charInfo.visibleAll —— OCIChar.OnVisible(false) 里被置 false，最直接；
@@ -39,22 +134,7 @@ namespace KKPEHeightLock
             catch (Exception) { }
             return true;
         }
-
-        /// <summary>
-        /// 把场景里的 female 换成角色卡：**第一个** female 用主角色卡，
-        /// 其余按次角色卡列表（数字优先 / 随机）依次换。
-        ///
-        /// 规则就三条：
-        ///   · 主卡有值 → 第一个 female 一定用主卡；
-        ///   · 主卡为空 → 第一个 female 也从次卡列表里取（等于「全部按次卡」）；
-        ///   · 次卡列表为空 → 全部退回主卡（老版本「一张卡换全场」的行为）。
-        ///
-        /// 「第一个 female」按工作室对象编号（dicObjectCtrl 的 key）排序，
-        /// 顺序稳定 —— 字典遍历顺序不保证，直接遍历会出现「这次换这张、下次换那张」。
-        /// 只处理**显示中**的 female：隐藏（眼睛图标关掉）的角色跳过，主/次卡分配也只在
-        /// 显示中的角色之间进行。
-        /// </summary>
-        private static IEnumerator ReplaceFemale(ExportOptions o)
+        private static IEnumerator ReplaceFemale(ExportOptions o, HashSet<int> revealed)
         {
             // **必须在换人之前**：KKPE 碰撞体的「Enable New Dynamic Bones」开着时，
             // 一旦角色重建，新出现的动骨会被自动加进碰撞体的影响列表 → 饰品头发被吸走。
@@ -70,10 +150,17 @@ namespace KKPEHeightLock
             catch (Exception) { }
             if (studio == null) { Log("找不到 Studio 实例，跳过替换"); yield break; }
 
-            // 角色按对象编号排序，保证「第一个 female」是稳定的。
-            // 只收集**显示中**的 female —— 隐藏的（眼睛图标关掉）跳过，不参与替换。
-            var chars = new List<KeyValuePair<int, Studio.OCIChar>>();
-            int hiddenCount = 0;
+            // 按对象编号排序，保证「第一个 female」和「前一个显示角色」的顺序稳定 ——
+            // 字典遍历顺序不保证，直接遍历会出现「这次换这张、下次换那张」。
+            // 角色分三种，分开处理：
+            //   ① 显示中                → 按顺序拿主卡 / 次卡（消耗一个新卡序号）；
+            //   ② 隐藏但会被取消隐藏（前后关系）→ 用「上一个显示角色」的卡，不消耗新序号；
+            //   ③ 真隐藏                → 跳过。
+            var slots = new List<FemaleSlot>();
+            // 先标记：哪些 female 在 timeline 里出现过（位置/骨骼/表情/显隐任意通道）。
+            // 换装卡里隐藏的 female 几乎都是靠位置动画入场的，不能只看 objectEnabled。
+            var isInTimeline = BuildTimelinePredicate(revealed);
+            var diagMap = BuildTimelineIndexMap(studio);   // 仅用于诊断日志
             try
             {
                 if (studio.dicObjectCtrl != null)
@@ -81,21 +168,31 @@ namespace KKPEHeightLock
                     {
                         var oc = kv.Value as Studio.OCIChar;
                         if (oc == null || oc.sex != 1 || oc.charInfo == null) continue;
-                        if (!IsFemaleVisible(oc)) { hiddenCount++; continue; }
-                        chars.Add(new KeyValuePair<int, Studio.OCIChar>(kv.Key, oc));
+                        bool visible = IsFemaleVisible(oc);
+                        bool inTl = isInTimeline(oc);
+                        int tlIndex = TimelineIndexOf(diagMap, oc);
+                        Log($"  角色 key={kv.Key} tlIndex={tlIndex} visible={visible} inTimeline={inTl}");
+                        slots.Add(new FemaleSlot
+                        {
+                            Key = kv.Key, TlIndex = tlIndex, Oci = oc,
+                            Visible = visible, InTimeline = inTl
+                        });
                     }
             }
             catch (Exception e) { Log("枚举角色失败：" + e.Message); yield break; }
-            chars.Sort(delegate(KeyValuePair<int, Studio.OCIChar> a, KeyValuePair<int, Studio.OCIChar> b)
-            {
-                return a.Key.CompareTo(b.Key);
-            });
+            slots.Sort(delegate(FemaleSlot a, FemaleSlot b) { return a.Key.CompareTo(b.Key); });
 
-            if (chars.Count == 0)
+            int shownCount = 0, hiddenCount = 0, hiddenInTl = 0;
+            for (int s = 0; s < slots.Count; s++)
             {
-                Log("[提示] 场景里没有显示中的 female"
-                    + (hiddenCount > 0 ? $"（另有 {hiddenCount} 个隐藏角色被跳过）" : "")
-                    + "，跳过替换");
+                if (slots[s].Visible) shownCount++;
+                else { hiddenCount++; if (slots[s].InTimeline) hiddenInTl++; }
+            }
+            // 只剩隐藏角色也照样换：换装卡的第一帧可能就是隐藏态，主卡必须换上去，
+            // 否则一播放就露出场景原角色。
+            if (slots.Count == 0)
+            {
+                Log("[提示] 场景里没有 female，跳过替换");
                 yield break;
             }
 
@@ -125,25 +222,68 @@ namespace KKPEHeightLock
                 yield break;
             }
 
-            Log($"替换方案：{chars.Count} 个显示中的 female"
-                + (hiddenCount > 0 ? $"（跳过 {hiddenCount} 个隐藏角色）" : "")
+            Log($"替换方案：{shownCount} 个显示 female"
+                + (hiddenCount > 0 ? $" + {hiddenCount} 个隐藏角色（其中 {hiddenInTl} 个在 timeline 里出现过）→ 一律用主卡" : "")
                 + $"，主卡={(main != null ? NameOf(main) : "（无）")}，"
                 + $"次卡 {pool.Count} 张，顺序={(o.SubRandom ? "随机" : "数字优先")}");
 
-            int done = 0, byMain = 0, bySub = 0;
+            int done = 0, byMain = 0, bySub = 0, byHidden = 0;
             var swapped = new List<Studio.OCIChar>();
             var scenes = new List<BodySnap>();
             var cards = new List<BodySnap>();
             var rng = new System.Random();
+            int shownIndex = 0;      // 显示角色的卡序号（主/次卡分配用），只有显示角色才消耗
+            string prevCard = null;  // 上一个显示角色用的卡；会取消隐藏的隐藏角色（前后关系）复用它
 
-            for (int n = 0; n < chars.Count; n++)
+            foreach (var slot in slots)
             {
-                var oci = chars[n].Value;
-                string card = PickCardForFemale(o, n, main, pool, rng, out string tag);
+                // 停止：立刻中断，不再换后面的角色（否则点了停止还会继续替换）。
+                if (CancelRequested) { Log("[停止] 中断替换，剩余角色不再处理"); yield break; }
+                // 暂停：停在**角色与角色之间**等 ESC。不能停在一个角色换到一半的位置
+                // （骨架/网格处于半重建状态，继续时容易出错）。
+                // 只在「进入暂停」时写一次阶段和日志：SetPhase 每次都会 LogMessage，
+                // 放在 while 里会每帧刷一条（实测一次暂停刷了 51 条，把日志冲没了）。
+                if (Paused && !CancelRequested) SetPhase("已暂停：按 ESC 继续");
+                while (Paused && !CancelRequested) yield return null;
+                if (CancelRequested) { Log("[停止] 中断替换，剩余角色不再处理"); yield break; }
+
+                string card;
+                string tag;
+                if (slot.Visible)
+                {
+                    card = PickCardForFemale(o, shownIndex, main, pool, rng, out tag);
+                    shownIndex++;
+                }
+                else
+                {
+                    // 隐藏角色：换装卡里它们就是同一个人的其他造型，在 timeline 之后会被
+                    // 移进画面/取消隐藏。**一律用主角色卡**（不消耗次卡序号），
+                    // 这样换装前后是同一个人；主卡没选时退回上一个显示角色的卡，
+                    // 再不行才从次卡池里取一张兜底。
+                    if (!string.IsNullOrEmpty(main))
+                    {
+                        card = main;
+                        tag = slot.InTimeline ? "主卡·前后关系" : "主卡·隐藏";
+                    }
+                    else if (!string.IsNullOrEmpty(prevCard))
+                    {
+                        card = prevCard;
+                        tag = "前卡·前后关系";
+                    }
+                    else
+                    {
+                        card = PickCardForFemale(o, shownIndex, main, pool, rng, out tag);
+                        shownIndex++;
+                    }
+                }
+
                 if (string.IsNullOrEmpty(card)) continue;
+                // 记录「上一个换掉的卡」，主卡为空时给后面的隐藏角色兜底。
+                prevCard = card;
 
                 try
                 {
+                    var oci = slot.Oci;
                     var sceneBody = BodySnap.Capture(oci);
                     oci.ChangeChara(card);
                     // 换人后 KKS 有时不会把卡里的 addMove（每件饰品的位置/旋转/缩放）应用上去：
@@ -162,8 +302,12 @@ namespace KKPEHeightLock
                     scenes.Add(sceneBody);
                     cards.Add(cardBody);
                     done++;
-                    if (tag.StartsWith("主", StringComparison.Ordinal)) byMain++; else bySub++;
-                    Log($"  female#{n + 1} ← [{tag}] {NameOf(card)}");
+                    if (slot.Visible)
+                    {
+                        if (tag.StartsWith("主", StringComparison.Ordinal)) byMain++; else bySub++;
+                    }
+                    else byHidden++;
+                    Log($"  female(obj {slot.Key}){(slot.Visible ? "" : (slot.InTimeline ? "·隐藏/在timeline" : "·隐藏"))} ← [{tag}] {NameOf(card)}");
                 }
                 catch (Exception e) { Log("替换出错：" + e.Message); }
                 yield return null;
@@ -174,7 +318,9 @@ namespace KKPEHeightLock
             for (int round = 0; round < 3; round++)
             {
                 for (int i = 0; i < swapped.Count; i++)
+                {
                     BodySnap.Compose(swapped[i], scenes[i], cards[i], o);
+                }
                 for (int f = 0; f < 2; f++) yield return null;
             }
 
@@ -182,7 +328,7 @@ namespace KKPEHeightLock
             if (o.LockHeight)
                 for (int i = 0; i < swapped.Count; i++) BodySnap.LockHeight(swapped[i]);
 
-            Log($"替换完成：{done} 个 female（主卡 {byMain} / 次卡 {bySub}）");
+            Log($"替换完成：{done} 个 female（显示用主卡 {byMain} / 显示用次卡 {bySub} / 隐藏用主卡 {byHidden}）");
         }
 
         /// <summary>
@@ -551,7 +697,14 @@ namespace KKPEHeightLock
             return sb.ToString();
         }
 
-        private static List<Studio.OCIChar> CollectFemales()
+        /// <summary>
+        /// 收集要应用服装 / 体型的 female。
+        ///
+        /// **所有** female 都收，包括隐藏的：换装卡里隐藏角色靠位置动画入场，
+        /// 是同一个人换的另一套造型，必须跟着穿同一套衣服、用同一套体型，
+        /// 否则换装前后衣服/身材对不上。
+        /// </summary>
+        private static List<Studio.OCIChar> CollectFemales(HashSet<int> revealed)
         {
             var list = new List<Studio.OCIChar>();
             try
@@ -562,7 +715,7 @@ namespace KKPEHeightLock
                 {
                     var oc = kv.Value as Studio.OCIChar;
                     if (oc == null || oc.sex != 1 || oc.charInfo == null) continue;
-                    if (!IsFemaleVisible(oc)) continue;   // 隐藏角色不参与换装/体型等操作
+                    // 隐藏的 female 也收：换装卡里它们会入场，必须同一套衣服/体型。
                     list.Add(oc);
                 }
             }
@@ -580,7 +733,7 @@ namespace KKPEHeightLock
         /// 另外部件状态要**在一个循环里批量设**：SetClothesState 每调一次都会让
         /// 角色重建一遍网格，9 个部件分 9 次设就是 9 轮重建，实测能吃掉好几秒。
         /// </summary>
-        private static IEnumerator ApplyClothes(ExportOptions o)
+        private static IEnumerator ApplyClothes(ExportOptions o, HashSet<int> revealed)
         {
             bool wantOutfit = o.Outfit >= 0 || o.Outfit == -2;   // -2 = 随机
             bool wantParts = false;
@@ -589,7 +742,7 @@ namespace KKPEHeightLock
                     if (o.ClothesParts[i] >= 0) { wantParts = true; break; }
             if (!wantOutfit && !wantParts) yield break;
 
-            var chars = CollectFemales();
+            var chars = CollectFemales(revealed);
             if (chars.Count == 0)
             {
                 Log("[提示] 场景里没有 female，跳过服装设置");
@@ -599,30 +752,74 @@ namespace KKPEHeightLock
             var snaps = new List<BodySnap>();
             for (int i = 0; i < chars.Count; i++) snaps.Add(BodySnap.Capture(chars[i]));
 
-            int nCoord = 0, nParts = 0;
+            // **等 ChangeChara 的 Reload 落地**。
+            // ReplaceFemale 里每个角色都调过 ChangeChara，它的 Reload 是分帧执行的；
+            // 这期间 fileStatus / chaFile.coordinate 还没就绪，这时调 SetCoordinateInfo，
+            // 内部 ChangeCoordinateType() 会返回 false —— 于是**静默不换装**：
+            // 没异常、没日志，看起来就是"随机服装失效"。
+            // 实测等 12 帧（约 0.2s）足够让 10 个以内的角色全部就绪。
+            for (int f = 0; f < 12; f++) yield return null;
+
+            int nCoord = 0, nParts = 0, nCoordFail = 0;
             var picked = new List<string>();
             for (int i = 0; i < chars.Count; i++)
             {
+                // 停止 / 暂停也在角色之间生效（和替换 female 同样的语义）
+                if (CancelRequested) { Log("[停止] 中断换装，剩余角色不再处理"); yield break; }
+                // 只在「进入暂停」时写一次阶段和日志：SetPhase 每次都会 LogMessage，
+                // 放在 while 里会每帧刷一条（实测一次暂停刷了 51 条，把日志冲没了）。
+                if (Paused && !CancelRequested) SetPhase("已暂停：按 ESC 继续");
+                while (Paused && !CancelRequested) yield return null;
+                if (CancelRequested) { Log("[停止] 中断换装，剩余角色不再处理"); yield break; }
+
                 var oc = chars[i];
                 if (wantOutfit)
                 {
+                    // 挑槽位（随机时只挑「卡片里真的有衣服」的槽，挑到空槽会变裸体）
+                    int slot = o.Outfit;
+                    string pickDesc = null;
                     try
                     {
-                        int slot = o.Outfit;
                         if (slot == -2)
                         {
-                            // 随机：只在自己卡片里「真的有衣服」的槽位里挑，
-                            // 挑到空槽会变成裸体，比不换还糟。
                             var slots = AvailableOutfits(oc.charInfo);
+                            if (slots.Count == 0)
+                                Log("[提示] 读不出可用服装槽位（角色卡可能还在加载），退回 #0 私服");
                             slot = (slots.Count > 0)
                                 ? slots[UnityEngine.Random.Range(0, slots.Count)]
-                                : 0;      // 读不出槽位就退回第一套（私服）
-                            picked.Add("#" + slot + " " + OutfitName(slot));
+                                : 0;
+                            pickDesc = "#" + slot + " " + OutfitName(slot);
                         }
-                        oc.SetCoordinateInfo((ChaFileDefine.CoordinateType)slot, true);
+                    }
+                    catch (Exception e) { Log("挑选服装槽失败：" + e.Message); }
+
+                    // 切槽。注意 yield 不能放在 try/catch 里（C# 限制），所以拆开写。
+                    bool switched = true;
+                    try { oc.SetCoordinateInfo((ChaFileDefine.CoordinateType)slot, true); }
+                    catch (Exception e2) { Log("切换套装失败：" + e2.Message); switched = false; }
+                    yield return null;
+
+                    // 验证真的切过去了。ChangeCoordinateType 失败时**不抛异常**，
+                    // 只能看 fileStatus.coordinateType 有没有变成目标槽位。
+                    if (switched) switched = CoordinateIs(oc, slot);
+                    if (!switched)
+                    {
+                        try { oc.SetCoordinateInfo((ChaFileDefine.CoordinateType)slot, true); }
+                        catch (Exception) { }
+                        yield return null;
+                        switched = CoordinateIs(oc, slot);
+                    }
+
+                    if (!switched)
+                    {
+                        nCoordFail++;
+                        Log("[提示] 服装槽 #" + slot + " 切换没生效（重试后仍失败）");
+                    }
+                    else
+                    {
+                        if (pickDesc != null) picked.Add(pickDesc);
                         nCoord++;
                     }
-                    catch (Exception e) { Log("切换套装失败：" + e.Message); }
                 }
                 if (wantParts)
                 {
@@ -649,15 +846,36 @@ namespace KKPEHeightLock
                     Log("已切换服装预设 #" + o.Outfit + "（" + nCoord + " 个 female）");
             }
             if (nParts > 0) Log("已设置部件状态 " + nParts + " 处");
+            if (nCoordFail > 0)
+                Log($"[提示] {nCoordFail} 个角色的服装槽切换失败（已重试一次，仍没生效）");
 
-            // 套装切换/换装是分帧重建网格的，等它收尾再把身材写回去
+            // 换装会分帧重建网格，等收尾后按「换装前快照」还原体型 + 乳量。
+            // 用 Compose（不用 RestoreBustPhysics）—— 后者不写 shapeValueBody，乳量大小回不去。
+            // 写两遍，防止 SetCoordinateInfo 内部的刷新覆盖。
             for (int f = 0; f < 6; f++) yield return null;
             for (int i = 0; i < chars.Count; i++)
                 if (snaps[i] != null) BodySnap.Compose(chars[i], snaps[i], snaps[i], o);
 
+            for (int f = 0; f < 3; f++) yield return null;
+            for (int i = 0; i < chars.Count; i++)
+                if (snaps[i] != null) BodySnap.Compose(chars[i], snaps[i], snaps[i], o);
+
+            Log("[体型] 换装后按换装前快照还原（shape + 乳量）");
+
         }
 
 
+
+        /// <summary>角色当前的服装槽位是不是 slot。读不到时按 true 处理，避免误报失败。</summary>
+        private static bool CoordinateIs(Studio.OCIChar oc, int slot)
+        {
+            try
+            {
+                if (oc == null || oc.charInfo == null || oc.charInfo.fileStatus == null) return true;
+                return oc.charInfo.fileStatus.coordinateType == slot;
+            }
+            catch (Exception) { return true; }
+        }
 
         /// <summary>
         /// 角色卡里「真的有衣服」的服装槽位。随机服装只在这些槽位里挑。

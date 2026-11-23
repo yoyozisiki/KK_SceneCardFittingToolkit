@@ -111,6 +111,24 @@ namespace KKPEHeightLock
         /// <summary>逐帧录制时放开帧率上限（关垂直同步）。</summary>
         public bool UncapFps = true;
 
+        /// <summary>
+        /// 预览模式：只切场景 + 走完替换 female 的整套准备流程（时序与导出完全一致），
+        /// **不调用 VideoExport 录制**、也不隐藏界面。用来在正式导出前看效果。
+        /// </summary>
+        public bool PreviewOnly;
+
+        /// <summary>
+        /// 全局 female 皮肤卡路径（绝对路径；空 = 不应用）。
+        /// 替换完 female 后，把这张卡的 face + body 套给所有 female（体型保持原样）。
+        /// </summary>
+        public string GlobalSkinCard = "";
+
+        /// <summary>
+        /// male 半透明度：0 = 不处理，0~1 = 透明度（越小越透）。
+        /// 作用于 male 的身体、服装、饰品（换透明 shader + alpha 混合）。
+        /// </summary>
+        public float MaleAlpha;
+
         /// <summary>淡入淡出总共要额外录多少秒（首尾各 FadeSeconds）。</summary>
         public float FadePad
         {

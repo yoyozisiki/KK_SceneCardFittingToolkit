@@ -83,8 +83,10 @@ namespace KKPEHeightLock
         // ---------------------------------------------------------------- 缓存
         // 列表里滚动时会反复问同一张卡的时长，缓存住避免重复读盘。
         private static readonly Dictionary<string, Info> Cache = new Dictionary<string, Info>();
+        // 同一张卡也会被反复问「哪些角色会被 timeline 取消隐藏」，同样缓存。
+        private static readonly Dictionary<string, HashSet<int>> RevealCache = new Dictionary<string, HashSet<int>>();
 
-        public static void ClearCache() { Cache.Clear(); }
+        public static void ClearCache() { Cache.Clear(); RevealCache.Clear(); }
 
         /// <summary>读一张卡的 Timeline；没有时间轴返回 null。结果会缓存。</summary>
         public static Info Read(string path)
@@ -129,6 +131,140 @@ namespace KKPEHeightLock
                 if (size > int.MaxValue) return null;
                 var all = ReadAt(fs, 0, (int)size);
                 return ParseBytes(all);
+            }
+        }
+
+        // ---------------------------------------------------------------- 取消隐藏的对象
+        /// <summary>
+        /// 读一张卡里「会被 Timeline 取消隐藏」的对象编号集合，没有时间轴返回空集合。
+        ///
+        /// Timeline 控制对象显隐靠 objectEnabled 通道，它直接写
+        /// <c>oci.treeNodeObject.visible</c>。value=true 表示显示、false 表示隐藏。
+        /// 一个初始隐藏的 female，只要它的 objectEnabled 通道里出现过 true 关键帧，
+        /// 就说明播放中会被「取消隐藏」—— 它和上一个显示的角色是前后关系（同一人的下一套造型），
+        /// 应跟前一个显示的角色用同一张替换卡。
+        ///
+        /// 结果会缓存；读文件的方式和时长一致（先尾部、再整文件）。
+        /// </summary>
+        public static HashSet<int> ReadRevealedObjects(string path)
+        {
+            var empty = new HashSet<int>();
+            if (string.IsNullOrEmpty(path)) return empty;
+            HashSet<int> hit;
+            if (RevealCache.TryGetValue(path, out hit)) return hit;
+
+            HashSet<int> set = empty;
+            try { set = ReadRevealedUncached(path); }
+            catch (Exception) { }
+            RevealCache[path] = set;
+            return set;
+        }
+
+        private static HashSet<int> ReadRevealedUncached(string path)
+        {
+            FileInfo fi = new FileInfo(path);
+            long size = fi.Length;
+            if (size <= 0) return new HashSet<int>();
+
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                                           FileShare.ReadWrite, 64 * 1024))
+            {
+                if (size > NearScan)
+                {
+                    var tail = ReadAt(fs, size - NearScan, (int)NearScan);
+                    var got = ParseRevealedBytes(tail);
+                    if (got != null) return got;
+                }
+                if (size > TailScan)
+                {
+                    var tail = ReadAt(fs, size - TailScan, TailScan);
+                    var got = ParseRevealedBytes(tail);
+                    if (got != null) return got;
+                }
+                if (size > int.MaxValue) return new HashSet<int>();
+                var all = ReadAt(fs, 0, (int)size);
+                var full = ParseRevealedBytes(all);
+                return full ?? new HashSet<int>();
+            }
+        }
+
+        private static HashSet<int> ParseRevealedBytes(byte[] data)
+        {
+            int start = 0;
+            while (start < data.Length)
+            {
+                int i = IndexOf(data, TimelineTag, start);
+                if (i < 0) return null;
+                string xml;
+                bool truncated;
+                if (TryXmlAfter(data, i, out xml, out truncated))
+                    return ParseRevealedXml(xml);
+                start = i + 1;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 从时间轴 XML 里提取「出现过 value=true 的 objectEnabled 通道」的对象编号。
+        /// 注意：通道的 enabled 属性是「这条曲线本身启不启用」，跟 keyframe 的
+        /// value（对象的显隐）是两回事，这里只看后者。
+        /// </summary>
+        private static HashSet<int> ParseRevealedXml(string xml)
+        {
+            var set = new HashSet<int>();
+            const string channel = "id=\"objectEnabled\"";
+            const string indexKey = "objectIndex=\"";
+            // 必须带空格：<interpolableGroup .../> 也以 "<interpolable" 开头，
+            // 但它没有 objectEnabled、还是自闭合的，误匹配会连带跳过紧随其后的真通道。
+            const string openTag = "<interpolable ";
+
+            int p = 0;
+            while (true)
+            {
+                int k = xml.IndexOf(openTag, p, StringComparison.Ordinal);
+                if (k < 0) break;
+                int gt = xml.IndexOf('>', k);
+                if (gt < 0) break;
+                string attrs = xml.Substring(k, gt - k + 1);
+
+                bool selfClosed = attrs.EndsWith("/>", StringComparison.Ordinal);
+                int end = selfClosed ? -1 : xml.IndexOf("</interpolable>", gt, StringComparison.Ordinal);
+                int next = end >= 0 ? end + "</interpolable>".Length : gt + 1;
+                string body = end >= 0 ? xml.Substring(gt + 1, end - gt - 1) : "";
+
+                if (attrs.Contains(channel))
+                {
+                    int oi = attrs.IndexOf(indexKey, StringComparison.Ordinal);
+                    if (oi >= 0)
+                    {
+                        int vs = oi + indexKey.Length;
+                        int ve = attrs.IndexOf('"', vs);
+                        int idx;
+                        if (ve > vs && int.TryParse(attrs.Substring(vs, ve - vs), out idx)
+                            && HasTrueKeyframe(body))
+                            set.Add(idx);
+                    }
+                }
+                p = next;
+            }
+            return set;
+        }
+
+        /// <summary>通道正文里有没有 &lt;keyframe … value="true"&gt;（对象被显示出来的帧）。</summary>
+        private static bool HasTrueKeyframe(string body)
+        {
+            int p = 0;
+            while (true)
+            {
+                int k = body.IndexOf("<keyframe", p, StringComparison.Ordinal);
+                if (k < 0) return false;
+                int gt = body.IndexOf('>', k);
+                if (gt < 0) return false;
+                string attrs = body.Substring(k, gt - k + 1);
+                // 只要外层 keyframe 的 value 是 true 就算——对象在这一帧被设为显示。
+                // 内层 curveKeyframe 的 value 是插值数值，不带 true/false，不会误命中。
+                if (attrs.Contains("value=\"true\"")) return true;
+                p = gt + 1;
             }
         }
 

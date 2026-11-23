@@ -34,6 +34,8 @@ namespace KKPEHeightLock
 
             o.Decensor = KKPEHeightLockPlugin.ExportDecensor.Value;
             o.RemoveSpheres = KKPEHeightLockPlugin.ExportRemoveSpheres.Value;
+            o.MaleAlpha = KKPEHeightLockPlugin.ExportMaleAlpha.Value;
+            o.GlobalSkinCard = ResolveUserDataPath(KKPEHeightLockPlugin.ExportGlobalSkinCard.Value);
             o.MinSeconds = KKPEHeightLockPlugin.ExportMinSeconds.Value;
             o.FadeSeconds = KKPEHeightLockPlugin.ExportFadeSeconds.Value;
             o.Fps = Mathf.Clamp(KKPEHeightLockPlugin.ExportFps.Value, 1, 240);
@@ -52,10 +54,32 @@ namespace KKPEHeightLock
             return o;
         }
 
+        /// <summary>配置里的皮肤卡路径：相对路径按 UserData 根解析。</summary>
+        private static string ResolveUserDataPath(string p)
+        {
+            if (string.IsNullOrEmpty(p)) return "";
+            try
+            {
+                if (System.IO.Path.IsPathRooted(p)) return p;
+                return System.IO.Path.Combine(BepInEx.Paths.GameRootPath, "UserData", p);
+            }
+            catch (Exception) { return p; }
+        }
+
         /// <summary>组参数并开跑。返回 false = 没启动（没勾卡 / VideoExport 没就绪）。</summary>
         public static bool Start(List<string> scenes)
         {
             return AutoExport.Start(KKPEHeightLockPlugin.Instance, Build(scenes));
+        }
+
+        /// <summary>
+        /// 预览：同样的参数，只走替换流程不录制（不需要 VideoExport）。
+        /// </summary>
+        public static bool StartPreview(List<string> scenes)
+        {
+            var o = Build(scenes);
+            o.PreviewOnly = true;
+            return AutoExport.StartPreview(KKPEHeightLockPlugin.Instance, o);
         }
     }
 }
