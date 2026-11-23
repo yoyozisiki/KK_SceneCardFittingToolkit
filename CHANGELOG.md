@@ -2,570 +2,50 @@
 
 版本号在 `src/Core/KKPEHeightLock.cs` 的 `Version` 常量。
 
----
-
-## 2.6.8
-
-### 修复：勾了「乳量取自场景」导致胸腔塌陷
-
-不是"场景卡被替换所以失效"，而是**参数不匹配**：
-
-`bustSoftness` / `bustWeight` 是配**特定体型**的物理参数。之前 `BustFromScene` 和
-`ShapeFromScene` 互相独立，于是可以出现「体型取自角色卡 + 乳量物理取自场景原角色」——
-场景那个角色的参数套到角色卡的身体上，胸腔直接塌掉。
-
-现在**乳量（大小和物理）必须跟体型同源**：
-
-    bool bustFromScene = o.BustFromScene && o.ShapeFromScene;
-
-只有「体型也取自场景」时，`BustFromScene` 才生效；体型用角色卡时，乳量也一律用角色卡。
-`shape` 里的乳量维度和 `bustSoftness/bustWeight` 都走这个判断。
-
-配置项说明也补了警告：`⚠ 只有「体型也取自场景」时才生效…`。
-
----
-
-## 2.6.8
-
-### 修复：胸腔消失 —— 是 bodyMask / AlphaMask 被跨角色复制了
-
-社区的权威说明（巴哈 MaterialEditor 教学帖）：
-
-> **bodyMask（身体遮罩）**：「穿緊身衣時…遊戲就會靠 **bodyMask 把胸部的部位強制指定為顯示衣服，
-> 原胸部皮膚則直接消滅**！！衣服裡面變成空洞…你必須修改 bodyMask 才能解決這問題」
-
-kknow 的 MaterialEditor 教程里也明确写：**复制 shader 之前要把 UV 相关的自定义贴图 Reset 掉**，
-只复制 shader 和不依赖 UV 的参数（MatCap / Gloss / 颜色），否则贴图错位。
-
-所以 2.6.6/2.6.7 把 `cf_m_body` 的**全部贴图**（含 `_AlphaMask` / bodyMask）一起复制过来，
-遮罩按模板卡的身体 UV 画，套到目标角色身上就把胸腔整片挖掉了 —— 表现就是"胸没了 / 透明"。
-
-修复：
-
-- **缓存阶段就不存** 名字含 `mask` / `alpha` / `overlay` / `underlay` 的贴图；
-- **应用阶段再挡一层**（同样关键词），即使旧缓存里有也不会写进去；
-- 缓存格式版本 `1 → 2`，旧缓存自动失效重建；
-- 已经手动清掉一次 `BepInEx/config/SkinCache/*.bin`。
-
-保留下来的：`shader`、`MainTex`（身体 UV 是全局统一的，可以跨角色）、颜色、Float/Range
-参数（Gloss、ShadowPower 之类）。
-
----
-
-## 2.6.7
-
-### 修复：皮肤缓存从没生成（预览路径漏了）
-
-2.6.6 只把 `EnsureCache` 加在 `RunBatch`（批量）里，`RunPreview`（预览）没加 ——
-所以点预览测试时缓存永远不存在，`ApplyToAll` 只会打 `皮肤缓存为空，跳过应用`，
-`BepInEx/config/SkinCache/` 也一直是空的。
-
-抽出 `EnsureSkinCache(o)`，`RunPreview` 和 `RunBatch` 都先调一次。
-
-### 修复：换装把乳量物理又刷回去
-
-`SetCoordinateInfo` 内部会 `UpdateBustSoftnessAndGravity()`，之后分帧重建也可能再刷一次，
-只在末尾写一遍 `bustSoftness` / `bustWeight` 会被覆盖。
-改成**写两遍**（间隔 3 帧），日志：`[体型] 换装后只补乳量物理（写两遍防覆盖）`。
-
----
-
-## 2.6.6
-
-### 全局皮肤改成「一次性提取 → 本地缓存 → 只读文件」
-
-用户思路：**在导出最开始把模板卡的皮肤材质解析出来存到本地，之后加载本地文件**。
-这样 `AddFemale` 只在第一次做一次，之后完全不碰场景 —— 从根上避免"重建场景冲掉
-隐藏角色显隐 / timeline 索引"这类副作用。
-
-新增 `SkinMaterialCache`：
-
-- **缓存内容**：`cf_m_body` / `cf_m_face` 两个材质的
-  `shader`、全部 float / color / vector 属性、贴图（`EncodeToPNG` 存字节）
-  + 每张贴图的 offset / scale；
-- **缓存路径**：`BepInEx/config/SkinCache/skin_<hash>.bin`
-  （hash = 卡路径 + 文件大小 + 修改时间，卡一改自动失效重建）；
-- **生成时机**：`RunBatch` 开头、`WaitStudioReady` 之后（这时场景还是用户原场景），
-  只有缓存不存在时才 `AddFemale` 一次；提取完立刻删临时角色 + 还原所有角色的显隐；
-- **应用时机**：每张卡的 `2-b2`（换装后、姿态前），`SkinMaterialCache.ApplyToAll`
-  读缓存 → 找同名材质 → 写 shader/属性/贴图 → `ReloadNoAsync` → `RestoreAll` 还原体型；
-- **不取透明度**：`color` 类属性的 alpha 强制拉回 1，`renderQueue` 固定 2000 ——
-  模板卡可能是半透明的，照搬会让胸腔透出来。
-
-日志：
-
-    [皮肤] 首次使用，正在从角色卡提取材质（会临时加载一次模板角色）…
-    SceneTools: 皮肤材质已缓存 → skin_1a2b3c4d.bin（2 个材质）
-    [皮肤] 已有本地缓存，跳过提取
-    SceneTools: 已从本地缓存应用皮肤（cf_m_body/cf_m_face）给 场景 female，材质 2 个
-
----
-
-## 2.6.5
-
-### 修复：应用皮肤后胸腔塌成「空的 / 透明」
-
-两个原因：
-
-1. **体型还原不完整**：2.6.3 在 `ApplyGlobalSkin` 里用 `RestoreBustPhysics`（只补
-   `bustSoftness` / `bustWeight`）。但 `ReloadNoAsync(noChangeBody: false)` 是**重建身体**，
-   它会用 `custom.body.shapeValueBody` 重新生成 mesh —— 乳量那几个滑块如果还是卡里的原始值，
-   胸腔就会塌下去、看着像空的。
-   改成 **`RestoreAll`**（完整还原 shape + 乳量物理）。
-   注意：这里和 `ApplyClothes` 不一样，`ApplyClothes` 的快照是「换装前」的所以只补物理；
-   这里的快照是**当前正确的状态**，整份还原才对。
-
-2. **把模板卡的透明属性带了过来**：`CopyMaterialProperties` 原来连 `renderQueue` 一起复制。
-   模板卡的 `cf_m_body` 如果做过半透明（KKUSSalpha + renderQueue 3000 + `Color.a < 1`），
-   照搬过来身体就透了。
-   现在**不复制 renderQueue**，并把 `_Color` / `Color` / `_ShadowColor` / `Color2` 的
-   **alpha 一律拉回 1**、`renderQueue = 2000`（不透明）。皮肤只取贴图和颜色 RGB。
-
----
-
-## 2.6.4
-
-### 修复：画面里多出一个「没有上半身」的角色
-
-不是二次替换（日志可证：每张卡只有一次 `替换完成：N 个 female`）。
-是 2.6.3 为了读材质而 `Studio.AddFemale` 临时加的那个皮肤角色：
-
-- `AddFemale` / 之后的 `DeleteNode` 会把场景对象重建一遍，**隐藏角色的显隐状态被冲掉**，
-  于是本该隐藏的 female 冒了出来；
-- 临时角色在删除前也短暂可见，模型还没建全时就露出半个身子。
-
-修复：
-
-- `AddFemale` 之后立刻把临时角色 `charInfo.visibleAll = false` +
-  `treeNodeObject.SetVisible(false)`；
-- 复制前记录每个目标 female 的 `visibleAll`，删除临时角色后**原样还原**；
-- 临时角色删除仍走 `Studio.Studio.DeleteNode` → `OnDelete` 双兜底。
-
-### 修复：male 刘海透明、层次错（能透过刘海看到脑门）
-
-2.4.x 起 male 半透明会把**所有**材质换成 `KKUSSalpha` 并把 `renderQueue` 设成 3000，
-头发也被一起改了 —— 头发被排到不透明物体之后渲染，于是"先看到脑门、再透过刘海"。
-
-现在**跳过头发**（renderer 名或材质名含 `hair` 一律不动），保持原来的不透明 shader。
-日志新增「跳过头发 N」。
-
----
-
-## 2.6.3
-
-### 全局皮肤改成「MaterialEditor Copy Edits」的等价实现
-
-之前走的是 `ChaFileFace` / `ChaFileBody` 的**字段**（skinId / 肤色 / 涂装…），
-但用户手动做法是 **MaterialEditor → Copy Edits `cf_m_body` / `cf_m_face` → 粘到新角色同名材质**，
-两套东西并不等价 —— 字段那套不会带上 shader 和材质属性，所以看起来"皮肤没换"。
-
-MaterialEditor 的 `MaterialCopyEdits` 实际做的事是把 `shader + float/color/keyword/
-texture 属性 + renderQueue` 存进静态 `CopyData`，再 `MaterialPasteEdits` 写回去。
-所以这次直接复刻这个动作：
-
-1. `Studio.AddFemale(皮肤卡路径)` —— 临时把模板卡加成场景里的一个角色
-   （只有这样才能拿到**已经应用了 MaterialEditor 编辑**的材质对象）；
-2. 等它建完模型（最多 600 帧），收集它的 `cf_m_body` / `cf_m_face`；
-3. 逐个目标 female，找到**同名材质**，`CopyMaterialProperties` 整份复制：
-   shader、Color/Float/Range/Vector/Texture 全属性、texture offset/scale、
-   shaderKeywords、renderQueue、globalIlluminationFlags；
-4. `ReloadNoAsync(noChangeClothes:true, …)` 重建，再 `RestoreBustPhysics` 补乳量；
-5. `Studio.DeleteNode` 删掉临时角色。
-
-**完全不碰** headId / shapeValueFace / shapeValueBody / typeBone / 五官 —— 头不会变大。
-日志：`已按 MaterialEditor CopyEdits 方式应用皮肤（cf_m_body/cf_m_face）给 N 个 female（成功 N 个材质）`。
-
----
-
-## 2.6.2
-
-### 修复：全局皮肤导致「头异常大、比例不对」
-
-`ChaFileFace.Copy` / `ChaFileBody.Copy` 会把整份数据带过来，其中包含决定头大小和比例的字段：
-
-- `headId` —— 头模（决定头的绝对大小）
-- `shapeValueFace` —— 脸型滑块
-- `shapeValueBody` —— 体型
-- `typeBone` —— 骨架类型
-- 五官（眼睛/眉毛/鼻子/嘴）的形状 id
-
-只保留 `headId` + `shapeValueFace` 写回还不够，所以上一版头还是大。
-
-现在**完全不用 Copy**，改成逐字段只写「皮肤」：
-
-- **face**：`skinId` / `detailId` / `detailPower` / `cheekGlossPower`
-- **body**：`skinId` / `detailId` / `detailPower` / `skinMainColor` / `skinSubColor` /
-  `skinGlossPower` / 涂装（paintId/Color/LayoutId/Layout，数组 Clone）/ 晒痕 /
-  乳晕 / 体毛 / 指甲 / `drawAddLine`
-
-**头型、脸型、体型、骨架类型、五官形状一律不动。**
-
-`Reload` 之后只补乳量物理（`RestoreBustPhysics`），不写 shape。
-
----
-
-## 2.6.1
-
-### 修复：场景卡网格右侧一大块空隙
-
-`TileGrid.Cell` 原来用固定的 `W`（= Thumb+20）排列，窗口宽 1380 时 3 列只占 612px，
-右边空出 148px。现在**列宽按可用宽度均分**：
-
-    float cellW = (width - Gap) / cols;
-    return new Rect(Gap + col * cellW, ..., cellW - Gap, H);
-
-`ThumbRect` / `NameRect` / `SubRect` 也从固定的 `W` 改成 `tile.width`，
-缩略图仍然居中。卡片选择器一起受益。
-
-### 修复：换装后「脸和身体完全不一样」
-
-2.6.0 在 `ApplyClothes` 末尾用 `RestoreAll` 把 shape **和**乳量一起写回换装前的快照。
-但 `OCICharFemale.SetCoordinateInfo` 走的是
-`Reload(noChangeClothes:false, noChangeHead:true, noChangeHair:true, noChangeBody:true)`
-—— **身体根本没重建**，shape 还是换人后那一套；再写旧快照的 shape，等于把
-`ReplaceFemale` 配好的体型又改回去，看起来就是换了个人。
-
-新增 `BodySnap.RestoreBustPhysics`：换装后**只补 `bustSoftness` / `bustWeight`**
-（这两个会被 `UpdateBustSoftnessAndGravity()` 重置），**不动 shapeValueBody**。
-日志：`[体型] 换装后只补乳量物理，体型保持换人后的状态（不覆盖 shape）`。
-
-### 修复：全局皮肤"日志说应用了但画面没变"
-
-两个原因：
-
-1. **替换了引用**：`chaFile.custom.face = new ChaFileFace()` 这种写法，`ChaControl`
-   内部缓存了 `fileFace` / `fileBody` 的引用，换掉 `custom.face` 后它仍指着旧对象，
-   `Reload` 也换不过来。改成 **`dst.Copy(src)` 复制进现有对象**。
-2. **时序**：原来放在换装之后、姿态之前。现在明确放在
-   **换装之后、姿态之前**（`2-b2`），皮肤 Reload 重建的骨骼由后面的时间轴 seek 重新打姿态，
-   不会录成 T-pose；再往后的去码/过曝/male 只改材质，不碰脸和身体。
-
----
-
-## 2.6.0
-
-### 调整：角色光照上限 1.0 → 0.9
-
-`ClampCharacterLighting(0.9f)`，换人前后各压一次（两处都改）。
-
-### 新增：全局 female 皮肤（face + body）
-
-替换完 female、换完装之后，把一张指定角色卡的 **face + body** 套给场景里所有 female。
-
-- 配置项 `AutoExport / GlobalSkinCard`，默认 `chara/female/151579669_p3.png`
-  （相对 UserData；也可填绝对路径，留空 = 不应用）；
-- 只复制 face / body，不动 hair 和 coordinate；
-- **体型不会被覆盖**：应用前拍体型快照、`ReloadNoAsync(true, false, true, false)` 之后
-  用 `BodySnap.RestoreAll` 还原；
-- `noChangeClothes: true` 保证已经换好的衣服不被冲掉。
-
-日志：`已应用全局皮肤（face+body）给 N 个 female ← 文件名`。
-
-### 修复：乳量物理被改回角色卡的值
-
-根因在 `ApplyClothes` 末尾：它用「换装前快照」当 `Compose` 的 scene 参数，而那份快照在
-`ReplaceFemale` 阶段已经被按 `BustFromScene` 处理过一次；再走一次 Compose 的
-`BustFromScene` 分支，等于拿这份快照当「场景值」二次覆盖。
-
-新增 `BodySnap.RestoreAll(oci, snap)`：**按快照原样还原** shape + `bustSoftness` +
-`bustWeight`（并调 `UpdateBustSoftnessAndGravity` 刷物理），完全不走来源配置。
-换装本身不该改变体型，这才是正确语义。日志会打
-`[体型] 换装后已按换装前状态还原（体型 + 乳量物理）`。
-
-### 调整：场景卡缩略图放大
-
-`TileGrid.Thumb` 从 `const 132` 改成可变的 `static float`（`W`/`H` 由它算出来）。
-场景卡网格绘制时切到 **176**，画完恢复 132 —— 卡片选择器尺寸不变。
-
-### 关于工作区树「一栏两个选框」
-
-查过本插件全部代码：只有 `item.treeNodeObject.SetVisible(false)`（去遮挡物）和读
-`treeNodeObject.textName`，**没有任何地方改树的 UI 结构**，也没有 patch Studio 的树绘制。
-
-截图里的 `hip1` / `juice` 不是 Koikatsu 原生节点名（原生是 `cf_O_*` / `cf_J_*`），
-是**插件生成**的节点（动态骨骼 / 碰撞体一类），每个自带可见性图标 —— 所以看起来
-"一栏变成两个"。建议从 `BepInEx/plugins/StarPlugins/` 里的 `AAAAAAAAAAAA.dll`
-（含 `Fix_DynamicBones`）开始逐个排除。
-
----
-
-## 2.5.0
-
-### 修复：批量导出内存泄漏 / 32G 用满闪退
-
-**根因**：整个项目**从来没有释放过旧场景的资源**。Studio 的 `LoadSceneCoroutine`
-只销毁场景里的对象，**不会**卸载 asset bundle 里的贴图 / 网格 / 材质实例 ——
-Unity 只有 `Resources.UnloadUnusedAssets()` 才会真正回收。
-
-一张 hongcha 卡解出来就是几十 MB 贴图 + 上千个材质实例（去码、过曝抑制、
-male 半透明都会遍历所有 renderer 并访问 `.materials`，每次访问会实例化材质），
-连做十几张就线性累积到 32G，最后在**加载下一张卡时** OOM 闪退 ——
-和日志末尾停在 `SSS: scene_loaded1` 的现象完全吻合。
-
-修复：
-
-- 新增 `CleanupAfterCard()`：**每张卡录完**就
-  `Resources.UnloadUnusedAssets()`（等它跑完）+ `GC.Collect()`；
-- 新增 `LogMemory(tag)`：用 `Profiler.GetTotalAllocatedMemoryLong` /
-  `GetTotalReservedMemoryLong` / `GC.GetTotalMemory` 分别打 Unity 侧和托管堆；
-- 日志会在三处打内存：`批量开始`、每张 `开卡前`、`卡间清理后` ——
-  直接能看出是"每张涨一截"还是"某一张突然暴涨"。
-
-日志示例：
-
-    [内存] 批量开始：Unity 已用 3200MB / 保留 4100MB，托管堆 120MB
-    [内存] 开卡前：Unity 已用 3560MB / 保留 4400MB，托管堆 130MB
-    [内存] 卡间清理后：Unity 已用 3300MB / 保留 4100MB，托管堆 95MB
-
-如果「卡间清理后」仍然一张比一张高，说明泄漏不在场景资源，而在
-VideoExport / ReShade 的截图缓冲（那部分本插件控制不了，只能分批导出）。
-
----
-
-## 2.4.9
-
-### 修复：服装随机"失效"（其实是静默失败）
-
-根因不在随机逻辑，而在**时序**：
-
-`ReplaceFemale` 里每个角色都调过 `ChangeChara`，它的 `Reload` 是**分帧**执行的。
-`ApplyClothes` 紧接着就调 `SetCoordinateInfo(slot, true)`，而 `OCIChar.SetCoordinateInfo` 是：
-
-    if ((_force || ...) && charInfo.ChangeCoordinateType(_type))
-        charInfo.Reload(noChangeClothes: false, ...);
-
-`ChangeCoordinateType` 在角色卡还没就绪时会**返回 false** —— 于是整段什么都不做：
-不抛异常、不打日志，看起来就是「随机服装没生效」。日志里仍会出现
-「已随机切换服装预设 #6 社团」，但画面根本没换。
-
-修复：
-
-- `ApplyClothes` 开头先等 **12 帧**，让 `ChangeChara` 的 Reload 全部落地；
-- 切槽后**验证** `fileStatus.coordinateType` 是否等于目标槽位，不对就重试一次；
-- 重试后仍不对，打 `[提示] 服装槽 #N 切换没生效（重试后仍失败）`，并计入
-  `nCoordFail`，结尾汇总；
-- `AvailableOutfits` 返回空时打提示（说明角色卡还在加载），不再静默退回 #0。
-
-### 修复：暂停时日志被刷屏（一次暂停 51 条）
-
-`while (Paused)` 循环里每帧调 `SetPhase`，而 `SetPhase` 每次都 `LogMessage` ——
-一次暂停就刷了 51 条「已暂停：按 ESC 继续」，把真正的日志冲没了。
-现在只在**进入暂停**时写一次。
-
----
-
-## 2.4.8
-
-### 关键修正：性器要按「父节点链」判断，不能只看 renderer 自己的名字
-
-2.4.7 用的是 dankon / mnpb 关键词，但 `跳过性器材质` 仍是 0 —— 因为**男性性器的
-renderer 名字就是 `cf_O_body`**，真正标识在它的**父节点**上（Studio 工作区树里
-「股间」那一组）：
-
-    cf_01/cf_o_root/n_body/n_dankon/o_dankon/o_gomu
-    cf_01/cf_o_root/n_body/o_body_a/n_mnpb/o_mnpb
-
-现在新增 `IsUnderGenitalNode(Transform)`：从 renderer **往上爬最多 10 层父节点**，
-任一段命中 dankon / mnpb / mnpa / dan_f / goma / kokan 就判定为性器，跳过不透明化。
-
-判定升级为四重：**父节点链** + renderer 名 + 材质名 + shader 名。
-日志新增 `male 跳过的性器节点：父链→材质, …`，可直接看到跳过了哪些节点。
-
----
-
-## 2.4.7
-
-### 定位到性器真实命名：dankon / mnpb（不是 penis / kokan）
-
-上一版日志 `跳过性器材质 0`，而且名单被 900 字截断在眼睛。这次直接从
-`abdata/chara/oo_base.unity3d`（男性基础模型）里挖出真实节点结构：
-
-    cf_01/cf_o_root/n_body/n_dankon/o_dankon/o_gomu     ← 男根（dankon）
-    cf_01/cf_o_root/n_body/o_body_a/n_mnpb/o_mnpb       ← mnpb
-    cf_01/cf_o_root/n_cm_body/n_dankon 1/o_dan_f        ← 男根另一种布局
-    Shader Forge/mnpb                                    ← 男根专用 shader
-
-所以关键词改为 `dankon / mnpb / mnpa / dan_f / goma`（保留 penis/peni/penetrat/chimpo/manko），
-并且做**三重判定**：renderer 名 + 材质名 + **shader 名**（`Shader Forge/mnpb`）。
-
-名单日志也改了：只记身体/性器相关的名字（含 body/dankon/mnpb/…），
-并去掉 (Instance) 后缀去重 —— 上次就是因为头发/脸太多把 body 挤出了 900 字窗口。
-
----
-
-## 2.4.6
-
-### 修正：male 性器仍被透明（2.4.5 的名字匹配一个都没命中）
-
-日志可证：`跳过性器 renderer 0`。说明 Koikatsu 男性性器的 renderer 名字里
-**没有** penis/kokan 这些关键字（通常是 `body`，性器只是 body 的一个独立材质槽）。
-
-改动：
-- 判据从「只看 renderer 名」改为 **renderer 名 + 材质名**双重匹配
-  （`penis` / `peni` / `penetrat` / `kokan` / `chimpo` / `inko` / `manko` / `sex_`）；
-- 撤回上一版按 `objParts` 的排除 —— 查过 `ChaInfo`，`objParts` 是**服装子部件**
-  （`ClothesSubKind`），不是性器，用它会把部分衣服也留成不透明；
-- 每次导出会把 male 的 **renderer/材质完整名单**打进日志（`male renderer/材质 名单：…`），
-  下次能直接看出性器到底是哪个材质名，按需补关键词。
-
----
-
-## 2.4.5
-
-### 修复：角色光照在换人后被 Reflect() 覆盖回 1.2
-
-2.4.4 的日志能证明改成功过（`1.26 → 1`），但面板又变回 1.2：**换人 / 换装之后
-`CameraLightCtrl` 会 `Reflect()` 把场景里保存的光照重新应用一遍**，把之前压下去的值覆盖掉。
-现在在角色全部处理完之后（去遮挡物之后、ShadowPower 之前）**再压一次**，之后没有东西再改它。
-两次都会打日志：`角色光照亮度 X → Y`，可以直接看第二次那行。
-
-### 修改：不再动 Addcolor
-
-按要求去掉 `Addcolor` 的 clamp —— 那是角色作者调过的配色，不能改。
-过曝抑制现在**只抬 ShadowPower**（< 0.85 → 0.85）。
-
-### 修正：male 半透明不用「単色」，改回材质并保留原色
-
-2.4.4 用的 `SetVisibleSimple(true)` 是 Studio 的「単色 / 简单显示」——
-它把正常身体换成 `S_SimpleBody` **纯色替身**，所以看起来是「完全透明只剩白色轮廓」，
-不是带颜色的半透明。现在：
-
-- **去掉 SetVisibleSimple / SetSimpleColor**，全部走材质；
-- 材质换成 `KKUSSalpha`，**迁移原材质的贴图和颜色**（`_MainTex`→`MainTex`、`_Color`→`Color`），
-  只把 `Color.a` 降到 alpha —— 保留角色原本的肤色/衣服颜色；
-- `Color` / `_Color`、`Color2` / `_Color2`、`LineColor` / `_LineColor` 两种命名都写；
-- 再用 `Shader.GetPropertyCount()` 遍历属性找 alpha/opacity 类 Float 兜底；
-- **跳过性器 renderer**（名字含 penis / penetrat / kokan / peni），它们保持不透明。
-
-日志新增「跳过性器 renderer N」。
-
----
-
-## 2.4.4
-
-### 过曝根因确认：ShadowPower 被调到 0.55（默认 0.85）
-
-KKUSS 的 `ShadowPower` **越小越亮**。角色卡把它设成 0.55，画面就整体过曝、浅色衣服
-白成一片。现在导出时（换人换装之后）遍历所有角色材质：
-
-- `ShadowPower < 0.85` → 抬回 **0.85**（属性名同时试 `ShadowPower` / `_ShadowPower` / `shadowPower`）；
-- `Addcolor` RGB > 1 → clamp 到 1；
-- 不再只限 KKUSS 名，凡是暴露 `ShadowPower` 属性的材质都处理。
-
-日志会报「ShadowPower 抬回 0.85 的 N 个（最低见到 0.55）」，能直接确认。
-
-### 修正：角色光照改了但面板还显示 1.2
-
-2.4.3 已经能把 `light.intensity` 从 1.26 压到 1（日志可证），但 Light Controller 面板
-上的输入框仍显示旧值 —— 因为没调 `LightCalc.UpdateUI()`。现在改完会：
-同步 `sliderIntensity` / `inputIntensity` → 调 `UpdateUI()` → 调 `Reflect()`。
-
-### male 半透明改用游戏原生实现（主游戏 H 场景同款）
-
-不再靠猜 shader 属性。Studio 的「単色 / 简单显示」就是主游戏 H 场景男主半透明的实现：
-
-- `OCIChar.SetVisibleSimple(true)` → 隐藏正常身体，改用模型自带的 `S_SimpleBody` 替身；
-- `OCIChar.SetSimpleColor(Color)` → 设替身的 `_Color`（**alpha 就是透明度**）。
-
-身体走这条路；衣服/饰品仍走材质（替身只覆盖身体），并且改成**遍历 shader 属性**
-找所有名字含 alpha/opacity/transparen 的 Float/Range 来设值，不再硬编码 `"alpha"`。
-仍改不到时会把该 shader 的属性名打进日志，下次能直接看到真名。
-
----
-
-## 2.4.3
-
-### 修正：male 半透明改用 KKUSSalpha（衣服不透明 + 头发变白）
-
-2.4.2 把所有材质换成 `main_alpha`，结果衣服还是不透明、头发还变白。按实际测试改：
-
-- 统一换成 **`KKUSSalpha`**（KKUSS 包里的透明版 shader，
-  manifest：`Shader Name="KKUSSalpha" AssetBundle="chara/kkussalpha.unity3d"`），
-  然后直接改它的 **`alpha`** 属性（小写、无下划线）。
-- **换 shader 之前先迁移属性**：原生 shader 是 `_MainTex`/`_Color`，KKUSS 是
-  `MainTex`/`Color`。不先读旧值就换，贴图会全部丢掉 —— 头发变白就是这个原因。
-- KKUSSalpha 平时没有材质引用、`Shader.Find` 拿不到，所以补了一条
-  MaterialEditor 的 `LoadedShaders` 字典兜底（zipmod manifest 注册的 shader 都在里面）。
-
-### 修正：只限制「角色光照」，不是全局光照
-
-2.4.2 把所有 `Light` + `RenderSettings.ambientIntensity` + 所有灯光道具都压到 1.0，
-范围过大。实际上 Koikatsu 的 KKUSS/KKUTS 几乎只吃 `CameraLightCtrl` 里那盏角色灯
-（`LightCalc.light`），场景地图灯影响很小。现在只 clamp 这一盏：
-
-- 反射取 `CameraLightCtrl.lightChara`（LightCalc）→ `light`（Light），
-  亮度 > 1.0 就压到 1.0；
-- 同步面板上的 `sliderIntensity` / `inputIntensity`，UI 不会还显示旧值；
-- **不再动**场景灯、环境光、灯光道具。
-
-### 新增：KKUSS 过曝抑制（Addcolor clamp）
-
-浅色衣物整片白掉的另一个直接来源是 KKUSS 材质的 `Addcolor`（加色，默认 1,1,1,1）。
-角色卡常把它调到 1.2~2，配上强光就糊成一片。现在导出时把所有 KKUSS 系材质的
-`Addcolor` 的 RGB clamp 到 1.0（只压不抬，不动 Color / MainTex）。
-
----
-
-## 2.4.2
-
-### 修复：male 半透明把皮肤/衣服换成了道具 shader（像换了个人）
-
-2.4.1 的 shader 查找是「优先 main_item_alpha」，结果**所有材质**（包括皮肤、衣服）
-都被换成 `main_item_alpha` —— 那是道具用的 shader，没有皮肤阴影、腮红、衣服图案，
-所以看起来像换了一个人。现在按原 shader 类型映射：
-
-- 原 shader 名含 `item` → `main_item_alpha`
-- 其它（skin / clothes / hair）→ `main_alpha`
-- 找不到对应透明版就**不换 shader**（只尝试改 alpha/混合），宁可不够透也不破坏外观
-
-日志会打印「换 shader N / 无对应透明版 N / 无颜色属性 N」以及每个 male 材质的原 shader 名，
-方便下次直接看出映射对不对。
-
-### 新增：场景全局光照一律封顶 1.0
-
-场景卡经常把灯强度调到 2~8，配上 KKUSS 这类对光照敏感的 shader，浅色衣服/帽子/袜子
-会整片过曝。现在在**换人之前**统一封顶：
-
-- 场景里所有 `Light`（地图 P-MODMAP 灯、相机灯、Character Lighting 的灯）；
-- `RenderSettings.ambientIntensity`（Unity 环境光）；
-- `OCILight` 的保存值 `lightInfo.intensity`（同步树面板上的滑块）。
-
-只压不抬，已经很暗的灯保持原样。日志会报「Light N 个 / 环境光 N / 灯光道具 N 个」。
+> **版本编号勘误（2026-11-24）**
+>
+> 历史记录里 2.4.1 ~ 2.6.8 这批编号（共 20 条，含重复的 2.6.8）**全部作废**：它们是 2.4.0
+> 开发过程中临时递增的测试编号，从未作为独立版本发布，改动最终都并入了 2.4.0。
+>
+> 正式序列：… → 2.3.2 → **2.4.0** → **2.4.1（当前）**。
+>
+> 作废条目已归到文末「历史留档」，只用于查当时的实现细节，不要再引用其编号。
 
 ---
 
 ## 2.4.1
 
-### 修正：换装卡的隐藏 female 一律用主角色卡（2.4.0 的判定对 #06 不生效）
+### 代码整理（无功能改动）
 
-2.4.0 只处理「objectEnabled 通道里 value=true」的隐藏角色。但实际换装卡不是这么做的：
-hongcha #06 有 9 个 female，timeline 里只有 **1 个** objectEnabled 通道，
-其余 7 个隐藏 female 的入场靠的是 `guideObjectPos`/`guideObjectRot`（位置动画），
-甚至 `bonePos`/表情曲线 —— 所以 2.4.0 一个都识别不到，日志永远是
-「跳过 8 个真隐藏角色」。
+- **精简注释**：全仓注释占比 15% → 10.4%，导出流水线（`AutoExport*.cs`）21~23% → 12%。
+  统一成「只写做什么」，删掉失败过程与版本对比的叙述，保留会防坑的关键约束
+  （动骨自动吸附、ChangeChara 分帧 Reload、ffmpeg 定稿判据等）。
+- **清理无用代码**（全仓引用为 0，编译 0 错误）：
+  - `ScenePlayerModule`：`ListSubdirs` / `SetSceneSubdir` / `GoParentDir`，
+    字段 `_editChar` / `_fssMode` / `_timeScale`；
+  - `ScenePlayerModule.Random`：`SetRandomFemaleSubdir` / `SetRandomMaleSubdir` /
+    `ListRandomFemaleSubdirs` / `ListRandomMaleSubdirs`（子目录选择已统一走 `ApplySubdir` / `ListSubdirsAt`）；
+  - `ScenePlayerModule.Edit`：`SetEditChar` / `SetClothesAll` / `ToggleKinematic`；
+  - `ScenePlayerModule.Fss` / `.Timeline`：`FssCount` / `FssMode` / `TimelineSetTimeScale` / `TimelineTimeScale`；
+  - `TimelineReader`：`ClearCache` / `Info.Describe`；
+  - `UiTheme`：`ThemeSection` / `ThemeRow` / `ThemeRowOn` / `ThemeRowFolder` / `ThemeArrow`
+    及底层 `_row` / `_rowOn` / `_rowFolder` / `_head`；
+  - `SceneTools`：`GetColorAny` / `SetColorAny` / `AddColorNames` / `IsGenitalRenderer`；
+  - `SceneCatalog`：`Roots` / `RootName`；`SkinMaterialCache.Invalidate`；
+    `ConfigPanel.Truncate`；`PanelWindow.Show`；`TileGrid.CornerButtonRect`。
+- `CollectFemales()` / `ApplyClothes()` 去掉未使用的 `revealed` 参数。
 
-现在改成两步，且都在替换之前完成：
+### 编译
 
-1. **先标记**：读 Timeline 运行时数据，凡是某个 female 有**任意**插值项
-   （位置/旋转/骨骼/表情/显隐），就标记为「在 timeline 里出现过」；
-2. **再替换**：显示中的 female 照旧按主/次卡顺序分配；**隐藏的 female 一律用主角色卡**
-   （不消耗次卡序号），主卡没选时退回上一个显示角色的卡，再不行用次卡兜底。
-
-这样换装前后是同一个人，也不会再出现「隐藏角色被全部跳过」。
-日志会打印每个角色的 `inTimeline`，替换完成时会分别统计
-「显示用主卡 / 显示用次卡 / 隐藏用主卡」。
-
-### 修复：male 半透明找不到透明 shader
-
-`Shader.Find("Shader Forge/main_alpha")` 在 KKS 里返回 null —— 因为 main_alpha 平时
-没有被任何材质引用，没加载进显存。现在改用
-`Resources.FindObjectsOfTypeAll<Shader>()` 在**已加载的全部 shader** 里挑
-（优先 `main_item_alpha` / `main_alpha`，其次任何带 alpha 的），
-再退回常见名字，最后用 Unity 内置透明 shader 兜底。
+`dotnet build -c Release` → **0 错误**（仅 3 条既有 MSB3274/MSB3275 警告：
+`VRGIN_OpenXR` / `KKS_CharaStudioVR` 目标框架 4.6.2 高于项目的 4.6）。
 
 ---
 
 ## 2.4.0
+
+> 正式版。开发期那批测试编号（2.4.1 ~ 2.6.8，已作废）的改动全部并入本版，
+> 包括全局皮肤、角色光照上限 0.9、暂停/停止语义、批量导出 OOM 修复等；细节见文末留档。
 
 ### 修正：Timeline 里「会取消隐藏」的隐藏角色，按前后关系用上一个显示角色的卡
 
@@ -639,6 +119,8 @@ Timeline XML 里带 `value="true"` 关键帧的 `objectEnabled` 通道，取 `ob
 
 ### 2.3.1 的改动（保留）
 
+---
+
 ## 2.3.1
 
 ### 清理：删除旧的逐骨骼碰撞器忽略代码（衣服吸附验证通过）
@@ -664,6 +146,8 @@ Timeline XML 里带 `value="true"` 关键帧的 `objectEnabled` 通道，取 `ob
   辅以 `treeNodeObject.visible` 兜底；
 - 隐藏角色被跳过，主卡/次卡只在显示中的角色之间分配；
 - 日志会报「跳过 N 个隐藏角色」。
+
+---
 
 ## 2.3.0
 
@@ -692,6 +176,8 @@ Timeline XML 里带 `value="true"` 关键帧的 `objectEnabled` 通道，取 `ob
 
 - 如果衣服现在也正常 → 这套旧代码可以彻底删掉；
 - 如果衣服仍会被吸 → 把 `LegacyColliderIgnore` 设 `true` 做对照，再决定怎么处理。
+
+---
 
 ## 2.2.14
 
@@ -729,6 +215,8 @@ HSPE.AMModules.CollidersEditor
 跟 `FixColliderBinding` 开关一起走，默认开。之前那些办法（补忽略名单 / 清空 m_Colliders /
 停用碰撞体对象）全部保留为兜底，但按社区经验，开关这一条才是根上的。
 
+---
+
 ## 2.2.13
 
 ### 回滚：按卡片重写饰品位移/缩放（默认关）
@@ -754,6 +242,8 @@ Ver02: `InitLocalPosition` / `ResetParticlesPosition`）。
 日志：`[饰品] 已解除 N 处碰撞器吸附（M 个饰品动骨，动骨本身保持启用）`。
 
 这个开关跟着「修复碰撞体误吸附饰品」一起走，默认开。
+
+---
 
 ## 2.2.12
 
@@ -784,6 +274,8 @@ ChaFileAccessory.PartsInfo.addMove    : Vector3[2, 3]
 > 顺带留下一个可用的小工具：`temp/cecil/`（net46，引用 BepInEx 的 Mono.Cecil），
 > 用 `./Dump.exe Assembly-CSharp.dll <类型名>` 就能列出任意游戏类型的字段/属性，
 > 以后查游戏内部结构不用再猜。
+
+---
 
 ## 2.2.11
 
@@ -823,6 +315,8 @@ ChaFileAccessory.PartsInfo.addMove    : Vector3[2, 3]
 - 新增只读诊断 `[诊断]`：每件饰品的父级路径 / 动骨数 / 启用数 / 最大权重 / 碰撞器数 / 当前变换，
   `DiagnoseAccessoryDynamics` 默认开（排查完会关掉）。
 - 结论：动骨停用（启用 0）且饰品无任何碰撞器时画面依旧异常 → 与物理无关。
+
+---
 
 ## 2.2.9
 
@@ -1214,3 +708,571 @@ src/UI/       纯前端：窗口、控件、主题、各种面板与弹框
 
 内部迭代版本，未公开。主要能力：批量导出、换角色卡、服装预设与部件三态、
 Timeline 定时长与循环补齐、ReShade 实时泛光暗角、直出淡入淡出、去码去球、场景播放器。
+
+---
+
+# 历史留档（编号已作废）
+
+> 以下条目全部是 **2.4.0 的开发测试版**，编号不作为版本引用。
+> 标题前标了 `[作废]`，正文原样保留，方便回查当时的实现思路。
+
+---
+
+## [作废] 2.6.8
+
+### 修复：勾了「乳量取自场景」导致胸腔塌陷
+
+不是"场景卡被替换所以失效"，而是**参数不匹配**：
+
+`bustSoftness` / `bustWeight` 是配**特定体型**的物理参数。之前 `BustFromScene` 和
+`ShapeFromScene` 互相独立，于是可以出现「体型取自角色卡 + 乳量物理取自场景原角色」——
+场景那个角色的参数套到角色卡的身体上，胸腔直接塌掉。
+
+现在**乳量（大小和物理）必须跟体型同源**：
+
+    bool bustFromScene = o.BustFromScene && o.ShapeFromScene;
+
+只有「体型也取自场景」时，`BustFromScene` 才生效；体型用角色卡时，乳量也一律用角色卡。
+`shape` 里的乳量维度和 `bustSoftness/bustWeight` 都走这个判断。
+
+配置项说明也补了警告：`⚠ 只有「体型也取自场景」时才生效…`。
+
+---
+
+## [作废] 2.6.8
+
+### 修复：胸腔消失 —— 是 bodyMask / AlphaMask 被跨角色复制了
+
+社区的权威说明（巴哈 MaterialEditor 教学帖）：
+
+> **bodyMask（身体遮罩）**：「穿緊身衣時…遊戲就會靠 **bodyMask 把胸部的部位強制指定為顯示衣服，
+> 原胸部皮膚則直接消滅**！！衣服裡面變成空洞…你必須修改 bodyMask 才能解決這問題」
+
+kknow 的 MaterialEditor 教程里也明确写：**复制 shader 之前要把 UV 相关的自定义贴图 Reset 掉**，
+只复制 shader 和不依赖 UV 的参数（MatCap / Gloss / 颜色），否则贴图错位。
+
+所以 2.6.6/2.6.7 把 `cf_m_body` 的**全部贴图**（含 `_AlphaMask` / bodyMask）一起复制过来，
+遮罩按模板卡的身体 UV 画，套到目标角色身上就把胸腔整片挖掉了 —— 表现就是"胸没了 / 透明"。
+
+修复：
+
+- **缓存阶段就不存** 名字含 `mask` / `alpha` / `overlay` / `underlay` 的贴图；
+- **应用阶段再挡一层**（同样关键词），即使旧缓存里有也不会写进去；
+- 缓存格式版本 `1 → 2`，旧缓存自动失效重建；
+- 已经手动清掉一次 `BepInEx/config/SkinCache/*.bin`。
+
+保留下来的：`shader`、`MainTex`（身体 UV 是全局统一的，可以跨角色）、颜色、Float/Range
+参数（Gloss、ShadowPower 之类）。
+
+---
+
+## [作废] 2.6.7
+
+### 修复：皮肤缓存从没生成（预览路径漏了）
+
+2.6.6 只把 `EnsureCache` 加在 `RunBatch`（批量）里，`RunPreview`（预览）没加 ——
+所以点预览测试时缓存永远不存在，`ApplyToAll` 只会打 `皮肤缓存为空，跳过应用`，
+`BepInEx/config/SkinCache/` 也一直是空的。
+
+抽出 `EnsureSkinCache(o)`，`RunPreview` 和 `RunBatch` 都先调一次。
+
+### 修复：换装把乳量物理又刷回去
+
+`SetCoordinateInfo` 内部会 `UpdateBustSoftnessAndGravity()`，之后分帧重建也可能再刷一次，
+只在末尾写一遍 `bustSoftness` / `bustWeight` 会被覆盖。
+改成**写两遍**（间隔 3 帧），日志：`[体型] 换装后只补乳量物理（写两遍防覆盖）`。
+
+---
+
+## [作废] 2.6.6
+
+### 全局皮肤改成「一次性提取 → 本地缓存 → 只读文件」
+
+用户思路：**在导出最开始把模板卡的皮肤材质解析出来存到本地，之后加载本地文件**。
+这样 `AddFemale` 只在第一次做一次，之后完全不碰场景 —— 从根上避免"重建场景冲掉
+隐藏角色显隐 / timeline 索引"这类副作用。
+
+新增 `SkinMaterialCache`：
+
+- **缓存内容**：`cf_m_body` / `cf_m_face` 两个材质的
+  `shader`、全部 float / color / vector 属性、贴图（`EncodeToPNG` 存字节）
+  + 每张贴图的 offset / scale；
+- **缓存路径**：`BepInEx/config/SkinCache/skin_<hash>.bin`
+  （hash = 卡路径 + 文件大小 + 修改时间，卡一改自动失效重建）；
+- **生成时机**：`RunBatch` 开头、`WaitStudioReady` 之后（这时场景还是用户原场景），
+  只有缓存不存在时才 `AddFemale` 一次；提取完立刻删临时角色 + 还原所有角色的显隐；
+- **应用时机**：每张卡的 `2-b2`（换装后、姿态前），`SkinMaterialCache.ApplyToAll`
+  读缓存 → 找同名材质 → 写 shader/属性/贴图 → `ReloadNoAsync` → `RestoreAll` 还原体型；
+- **不取透明度**：`color` 类属性的 alpha 强制拉回 1，`renderQueue` 固定 2000 ——
+  模板卡可能是半透明的，照搬会让胸腔透出来。
+
+日志：
+
+    [皮肤] 首次使用，正在从角色卡提取材质（会临时加载一次模板角色）…
+    SceneTools: 皮肤材质已缓存 → skin_1a2b3c4d.bin（2 个材质）
+    [皮肤] 已有本地缓存，跳过提取
+    SceneTools: 已从本地缓存应用皮肤（cf_m_body/cf_m_face）给 场景 female，材质 2 个
+
+---
+
+## [作废] 2.6.5
+
+### 修复：应用皮肤后胸腔塌成「空的 / 透明」
+
+两个原因：
+
+1. **体型还原不完整**：2.6.3 在 `ApplyGlobalSkin` 里用 `RestoreBustPhysics`（只补
+   `bustSoftness` / `bustWeight`）。但 `ReloadNoAsync(noChangeBody: false)` 是**重建身体**，
+   它会用 `custom.body.shapeValueBody` 重新生成 mesh —— 乳量那几个滑块如果还是卡里的原始值，
+   胸腔就会塌下去、看着像空的。
+   改成 **`RestoreAll`**（完整还原 shape + 乳量物理）。
+   注意：这里和 `ApplyClothes` 不一样，`ApplyClothes` 的快照是「换装前」的所以只补物理；
+   这里的快照是**当前正确的状态**，整份还原才对。
+
+2. **把模板卡的透明属性带了过来**：`CopyMaterialProperties` 原来连 `renderQueue` 一起复制。
+   模板卡的 `cf_m_body` 如果做过半透明（KKUSSalpha + renderQueue 3000 + `Color.a < 1`），
+   照搬过来身体就透了。
+   现在**不复制 renderQueue**，并把 `_Color` / `Color` / `_ShadowColor` / `Color2` 的
+   **alpha 一律拉回 1**、`renderQueue = 2000`（不透明）。皮肤只取贴图和颜色 RGB。
+
+---
+
+## [作废] 2.6.4
+
+### 修复：画面里多出一个「没有上半身」的角色
+
+不是二次替换（日志可证：每张卡只有一次 `替换完成：N 个 female`）。
+是 2.6.3 为了读材质而 `Studio.AddFemale` 临时加的那个皮肤角色：
+
+- `AddFemale` / 之后的 `DeleteNode` 会把场景对象重建一遍，**隐藏角色的显隐状态被冲掉**，
+  于是本该隐藏的 female 冒了出来；
+- 临时角色在删除前也短暂可见，模型还没建全时就露出半个身子。
+
+修复：
+
+- `AddFemale` 之后立刻把临时角色 `charInfo.visibleAll = false` +
+  `treeNodeObject.SetVisible(false)`；
+- 复制前记录每个目标 female 的 `visibleAll`，删除临时角色后**原样还原**；
+- 临时角色删除仍走 `Studio.Studio.DeleteNode` → `OnDelete` 双兜底。
+
+### 修复：male 刘海透明、层次错（能透过刘海看到脑门）
+
+2.4.x 起 male 半透明会把**所有**材质换成 `KKUSSalpha` 并把 `renderQueue` 设成 3000，
+头发也被一起改了 —— 头发被排到不透明物体之后渲染，于是"先看到脑门、再透过刘海"。
+
+现在**跳过头发**（renderer 名或材质名含 `hair` 一律不动），保持原来的不透明 shader。
+日志新增「跳过头发 N」。
+
+---
+
+## [作废] 2.6.3
+
+### 全局皮肤改成「MaterialEditor Copy Edits」的等价实现
+
+之前走的是 `ChaFileFace` / `ChaFileBody` 的**字段**（skinId / 肤色 / 涂装…），
+但用户手动做法是 **MaterialEditor → Copy Edits `cf_m_body` / `cf_m_face` → 粘到新角色同名材质**，
+两套东西并不等价 —— 字段那套不会带上 shader 和材质属性，所以看起来"皮肤没换"。
+
+MaterialEditor 的 `MaterialCopyEdits` 实际做的事是把 `shader + float/color/keyword/
+texture 属性 + renderQueue` 存进静态 `CopyData`，再 `MaterialPasteEdits` 写回去。
+所以这次直接复刻这个动作：
+
+1. `Studio.AddFemale(皮肤卡路径)` —— 临时把模板卡加成场景里的一个角色
+   （只有这样才能拿到**已经应用了 MaterialEditor 编辑**的材质对象）；
+2. 等它建完模型（最多 600 帧），收集它的 `cf_m_body` / `cf_m_face`；
+3. 逐个目标 female，找到**同名材质**，`CopyMaterialProperties` 整份复制：
+   shader、Color/Float/Range/Vector/Texture 全属性、texture offset/scale、
+   shaderKeywords、renderQueue、globalIlluminationFlags；
+4. `ReloadNoAsync(noChangeClothes:true, …)` 重建，再 `RestoreBustPhysics` 补乳量；
+5. `Studio.DeleteNode` 删掉临时角色。
+
+**完全不碰** headId / shapeValueFace / shapeValueBody / typeBone / 五官 —— 头不会变大。
+日志：`已按 MaterialEditor CopyEdits 方式应用皮肤（cf_m_body/cf_m_face）给 N 个 female（成功 N 个材质）`。
+
+---
+
+## [作废] 2.6.2
+
+### 修复：全局皮肤导致「头异常大、比例不对」
+
+`ChaFileFace.Copy` / `ChaFileBody.Copy` 会把整份数据带过来，其中包含决定头大小和比例的字段：
+
+- `headId` —— 头模（决定头的绝对大小）
+- `shapeValueFace` —— 脸型滑块
+- `shapeValueBody` —— 体型
+- `typeBone` —— 骨架类型
+- 五官（眼睛/眉毛/鼻子/嘴）的形状 id
+
+只保留 `headId` + `shapeValueFace` 写回还不够，所以上一版头还是大。
+
+现在**完全不用 Copy**，改成逐字段只写「皮肤」：
+
+- **face**：`skinId` / `detailId` / `detailPower` / `cheekGlossPower`
+- **body**：`skinId` / `detailId` / `detailPower` / `skinMainColor` / `skinSubColor` /
+  `skinGlossPower` / 涂装（paintId/Color/LayoutId/Layout，数组 Clone）/ 晒痕 /
+  乳晕 / 体毛 / 指甲 / `drawAddLine`
+
+**头型、脸型、体型、骨架类型、五官形状一律不动。**
+
+`Reload` 之后只补乳量物理（`RestoreBustPhysics`），不写 shape。
+
+---
+
+## [作废] 2.6.1
+
+### 修复：场景卡网格右侧一大块空隙
+
+`TileGrid.Cell` 原来用固定的 `W`（= Thumb+20）排列，窗口宽 1380 时 3 列只占 612px，
+右边空出 148px。现在**列宽按可用宽度均分**：
+
+    float cellW = (width - Gap) / cols;
+    return new Rect(Gap + col * cellW, ..., cellW - Gap, H);
+
+`ThumbRect` / `NameRect` / `SubRect` 也从固定的 `W` 改成 `tile.width`，
+缩略图仍然居中。卡片选择器一起受益。
+
+### 修复：换装后「脸和身体完全不一样」
+
+2.6.0 在 `ApplyClothes` 末尾用 `RestoreAll` 把 shape **和**乳量一起写回换装前的快照。
+但 `OCICharFemale.SetCoordinateInfo` 走的是
+`Reload(noChangeClothes:false, noChangeHead:true, noChangeHair:true, noChangeBody:true)`
+—— **身体根本没重建**，shape 还是换人后那一套；再写旧快照的 shape，等于把
+`ReplaceFemale` 配好的体型又改回去，看起来就是换了个人。
+
+新增 `BodySnap.RestoreBustPhysics`：换装后**只补 `bustSoftness` / `bustWeight`**
+（这两个会被 `UpdateBustSoftnessAndGravity()` 重置），**不动 shapeValueBody**。
+日志：`[体型] 换装后只补乳量物理，体型保持换人后的状态（不覆盖 shape）`。
+
+### 修复：全局皮肤"日志说应用了但画面没变"
+
+两个原因：
+
+1. **替换了引用**：`chaFile.custom.face = new ChaFileFace()` 这种写法，`ChaControl`
+   内部缓存了 `fileFace` / `fileBody` 的引用，换掉 `custom.face` 后它仍指着旧对象，
+   `Reload` 也换不过来。改成 **`dst.Copy(src)` 复制进现有对象**。
+2. **时序**：原来放在换装之后、姿态之前。现在明确放在
+   **换装之后、姿态之前**（`2-b2`），皮肤 Reload 重建的骨骼由后面的时间轴 seek 重新打姿态，
+   不会录成 T-pose；再往后的去码/过曝/male 只改材质，不碰脸和身体。
+
+---
+
+## [作废] 2.6.0
+
+### 调整：角色光照上限 1.0 → 0.9
+
+`ClampCharacterLighting(0.9f)`，换人前后各压一次（两处都改）。
+
+### 新增：全局 female 皮肤（face + body）
+
+替换完 female、换完装之后，把一张指定角色卡的 **face + body** 套给场景里所有 female。
+
+- 配置项 `AutoExport / GlobalSkinCard`，默认 `chara/female/151579669_p3.png`
+  （相对 UserData；也可填绝对路径，留空 = 不应用）；
+- 只复制 face / body，不动 hair 和 coordinate；
+- **体型不会被覆盖**：应用前拍体型快照、`ReloadNoAsync(true, false, true, false)` 之后
+  用 `BodySnap.RestoreAll` 还原；
+- `noChangeClothes: true` 保证已经换好的衣服不被冲掉。
+
+日志：`已应用全局皮肤（face+body）给 N 个 female ← 文件名`。
+
+### 修复：乳量物理被改回角色卡的值
+
+根因在 `ApplyClothes` 末尾：它用「换装前快照」当 `Compose` 的 scene 参数，而那份快照在
+`ReplaceFemale` 阶段已经被按 `BustFromScene` 处理过一次；再走一次 Compose 的
+`BustFromScene` 分支，等于拿这份快照当「场景值」二次覆盖。
+
+新增 `BodySnap.RestoreAll(oci, snap)`：**按快照原样还原** shape + `bustSoftness` +
+`bustWeight`（并调 `UpdateBustSoftnessAndGravity` 刷物理），完全不走来源配置。
+换装本身不该改变体型，这才是正确语义。日志会打
+`[体型] 换装后已按换装前状态还原（体型 + 乳量物理）`。
+
+### 调整：场景卡缩略图放大
+
+`TileGrid.Thumb` 从 `const 132` 改成可变的 `static float`（`W`/`H` 由它算出来）。
+场景卡网格绘制时切到 **176**，画完恢复 132 —— 卡片选择器尺寸不变。
+
+### 关于工作区树「一栏两个选框」
+
+查过本插件全部代码：只有 `item.treeNodeObject.SetVisible(false)`（去遮挡物）和读
+`treeNodeObject.textName`，**没有任何地方改树的 UI 结构**，也没有 patch Studio 的树绘制。
+
+截图里的 `hip1` / `juice` 不是 Koikatsu 原生节点名（原生是 `cf_O_*` / `cf_J_*`），
+是**插件生成**的节点（动态骨骼 / 碰撞体一类），每个自带可见性图标 —— 所以看起来
+"一栏变成两个"。建议从 `BepInEx/plugins/StarPlugins/` 里的 `AAAAAAAAAAAA.dll`
+（含 `Fix_DynamicBones`）开始逐个排除。
+
+---
+
+## [作废] 2.5.0
+
+### 修复：批量导出内存泄漏 / 32G 用满闪退
+
+**根因**：整个项目**从来没有释放过旧场景的资源**。Studio 的 `LoadSceneCoroutine`
+只销毁场景里的对象，**不会**卸载 asset bundle 里的贴图 / 网格 / 材质实例 ——
+Unity 只有 `Resources.UnloadUnusedAssets()` 才会真正回收。
+
+一张 hongcha 卡解出来就是几十 MB 贴图 + 上千个材质实例（去码、过曝抑制、
+male 半透明都会遍历所有 renderer 并访问 `.materials`，每次访问会实例化材质），
+连做十几张就线性累积到 32G，最后在**加载下一张卡时** OOM 闪退 ——
+和日志末尾停在 `SSS: scene_loaded1` 的现象完全吻合。
+
+修复：
+
+- 新增 `CleanupAfterCard()`：**每张卡录完**就
+  `Resources.UnloadUnusedAssets()`（等它跑完）+ `GC.Collect()`；
+- 新增 `LogMemory(tag)`：用 `Profiler.GetTotalAllocatedMemoryLong` /
+  `GetTotalReservedMemoryLong` / `GC.GetTotalMemory` 分别打 Unity 侧和托管堆；
+- 日志会在三处打内存：`批量开始`、每张 `开卡前`、`卡间清理后` ——
+  直接能看出是"每张涨一截"还是"某一张突然暴涨"。
+
+日志示例：
+
+    [内存] 批量开始：Unity 已用 3200MB / 保留 4100MB，托管堆 120MB
+    [内存] 开卡前：Unity 已用 3560MB / 保留 4400MB，托管堆 130MB
+    [内存] 卡间清理后：Unity 已用 3300MB / 保留 4100MB，托管堆 95MB
+
+如果「卡间清理后」仍然一张比一张高，说明泄漏不在场景资源，而在
+VideoExport / ReShade 的截图缓冲（那部分本插件控制不了，只能分批导出）。
+
+---
+
+## [作废] 2.4.9
+
+### 修复：服装随机"失效"（其实是静默失败）
+
+根因不在随机逻辑，而在**时序**：
+
+`ReplaceFemale` 里每个角色都调过 `ChangeChara`，它的 `Reload` 是**分帧**执行的。
+`ApplyClothes` 紧接着就调 `SetCoordinateInfo(slot, true)`，而 `OCIChar.SetCoordinateInfo` 是：
+
+    if ((_force || ...) && charInfo.ChangeCoordinateType(_type))
+        charInfo.Reload(noChangeClothes: false, ...);
+
+`ChangeCoordinateType` 在角色卡还没就绪时会**返回 false** —— 于是整段什么都不做：
+不抛异常、不打日志，看起来就是「随机服装没生效」。日志里仍会出现
+「已随机切换服装预设 #6 社团」，但画面根本没换。
+
+修复：
+
+- `ApplyClothes` 开头先等 **12 帧**，让 `ChangeChara` 的 Reload 全部落地；
+- 切槽后**验证** `fileStatus.coordinateType` 是否等于目标槽位，不对就重试一次；
+- 重试后仍不对，打 `[提示] 服装槽 #N 切换没生效（重试后仍失败）`，并计入
+  `nCoordFail`，结尾汇总；
+- `AvailableOutfits` 返回空时打提示（说明角色卡还在加载），不再静默退回 #0。
+
+### 修复：暂停时日志被刷屏（一次暂停 51 条）
+
+`while (Paused)` 循环里每帧调 `SetPhase`，而 `SetPhase` 每次都 `LogMessage` ——
+一次暂停就刷了 51 条「已暂停：按 ESC 继续」，把真正的日志冲没了。
+现在只在**进入暂停**时写一次。
+
+---
+
+## [作废] 2.4.8
+
+### 关键修正：性器要按「父节点链」判断，不能只看 renderer 自己的名字
+
+2.4.7 用的是 dankon / mnpb 关键词，但 `跳过性器材质` 仍是 0 —— 因为**男性性器的
+renderer 名字就是 `cf_O_body`**，真正标识在它的**父节点**上（Studio 工作区树里
+「股间」那一组）：
+
+    cf_01/cf_o_root/n_body/n_dankon/o_dankon/o_gomu
+    cf_01/cf_o_root/n_body/o_body_a/n_mnpb/o_mnpb
+
+现在新增 `IsUnderGenitalNode(Transform)`：从 renderer **往上爬最多 10 层父节点**，
+任一段命中 dankon / mnpb / mnpa / dan_f / goma / kokan 就判定为性器，跳过不透明化。
+
+判定升级为四重：**父节点链** + renderer 名 + 材质名 + shader 名。
+日志新增 `male 跳过的性器节点：父链→材质, …`，可直接看到跳过了哪些节点。
+
+---
+
+## [作废] 2.4.7
+
+### 定位到性器真实命名：dankon / mnpb（不是 penis / kokan）
+
+上一版日志 `跳过性器材质 0`，而且名单被 900 字截断在眼睛。这次直接从
+`abdata/chara/oo_base.unity3d`（男性基础模型）里挖出真实节点结构：
+
+    cf_01/cf_o_root/n_body/n_dankon/o_dankon/o_gomu     ← 男根（dankon）
+    cf_01/cf_o_root/n_body/o_body_a/n_mnpb/o_mnpb       ← mnpb
+    cf_01/cf_o_root/n_cm_body/n_dankon 1/o_dan_f        ← 男根另一种布局
+    Shader Forge/mnpb                                    ← 男根专用 shader
+
+所以关键词改为 `dankon / mnpb / mnpa / dan_f / goma`（保留 penis/peni/penetrat/chimpo/manko），
+并且做**三重判定**：renderer 名 + 材质名 + **shader 名**（`Shader Forge/mnpb`）。
+
+名单日志也改了：只记身体/性器相关的名字（含 body/dankon/mnpb/…），
+并去掉 (Instance) 后缀去重 —— 上次就是因为头发/脸太多把 body 挤出了 900 字窗口。
+
+---
+
+## [作废] 2.4.6
+
+### 修正：male 性器仍被透明（2.4.5 的名字匹配一个都没命中）
+
+日志可证：`跳过性器 renderer 0`。说明 Koikatsu 男性性器的 renderer 名字里
+**没有** penis/kokan 这些关键字（通常是 `body`，性器只是 body 的一个独立材质槽）。
+
+改动：
+- 判据从「只看 renderer 名」改为 **renderer 名 + 材质名**双重匹配
+  （`penis` / `peni` / `penetrat` / `kokan` / `chimpo` / `inko` / `manko` / `sex_`）；
+- 撤回上一版按 `objParts` 的排除 —— 查过 `ChaInfo`，`objParts` 是**服装子部件**
+  （`ClothesSubKind`），不是性器，用它会把部分衣服也留成不透明；
+- 每次导出会把 male 的 **renderer/材质完整名单**打进日志（`male renderer/材质 名单：…`），
+  下次能直接看出性器到底是哪个材质名，按需补关键词。
+
+---
+
+## [作废] 2.4.5
+
+### 修复：角色光照在换人后被 Reflect() 覆盖回 1.2
+
+2.4.4 的日志能证明改成功过（`1.26 → 1`），但面板又变回 1.2：**换人 / 换装之后
+`CameraLightCtrl` 会 `Reflect()` 把场景里保存的光照重新应用一遍**，把之前压下去的值覆盖掉。
+现在在角色全部处理完之后（去遮挡物之后、ShadowPower 之前）**再压一次**，之后没有东西再改它。
+两次都会打日志：`角色光照亮度 X → Y`，可以直接看第二次那行。
+
+### 修改：不再动 Addcolor
+
+按要求去掉 `Addcolor` 的 clamp —— 那是角色作者调过的配色，不能改。
+过曝抑制现在**只抬 ShadowPower**（< 0.85 → 0.85）。
+
+### 修正：male 半透明不用「単色」，改回材质并保留原色
+
+2.4.4 用的 `SetVisibleSimple(true)` 是 Studio 的「単色 / 简单显示」——
+它把正常身体换成 `S_SimpleBody` **纯色替身**，所以看起来是「完全透明只剩白色轮廓」，
+不是带颜色的半透明。现在：
+
+- **去掉 SetVisibleSimple / SetSimpleColor**，全部走材质；
+- 材质换成 `KKUSSalpha`，**迁移原材质的贴图和颜色**（`_MainTex`→`MainTex`、`_Color`→`Color`），
+  只把 `Color.a` 降到 alpha —— 保留角色原本的肤色/衣服颜色；
+- `Color` / `_Color`、`Color2` / `_Color2`、`LineColor` / `_LineColor` 两种命名都写；
+- 再用 `Shader.GetPropertyCount()` 遍历属性找 alpha/opacity 类 Float 兜底；
+- **跳过性器 renderer**（名字含 penis / penetrat / kokan / peni），它们保持不透明。
+
+日志新增「跳过性器 renderer N」。
+
+---
+
+## [作废] 2.4.4
+
+### 过曝根因确认：ShadowPower 被调到 0.55（默认 0.85）
+
+KKUSS 的 `ShadowPower` **越小越亮**。角色卡把它设成 0.55，画面就整体过曝、浅色衣服
+白成一片。现在导出时（换人换装之后）遍历所有角色材质：
+
+- `ShadowPower < 0.85` → 抬回 **0.85**（属性名同时试 `ShadowPower` / `_ShadowPower` / `shadowPower`）；
+- `Addcolor` RGB > 1 → clamp 到 1；
+- 不再只限 KKUSS 名，凡是暴露 `ShadowPower` 属性的材质都处理。
+
+日志会报「ShadowPower 抬回 0.85 的 N 个（最低见到 0.55）」，能直接确认。
+
+### 修正：角色光照改了但面板还显示 1.2
+
+2.4.3 已经能把 `light.intensity` 从 1.26 压到 1（日志可证），但 Light Controller 面板
+上的输入框仍显示旧值 —— 因为没调 `LightCalc.UpdateUI()`。现在改完会：
+同步 `sliderIntensity` / `inputIntensity` → 调 `UpdateUI()` → 调 `Reflect()`。
+
+### male 半透明改用游戏原生实现（主游戏 H 场景同款）
+
+不再靠猜 shader 属性。Studio 的「単色 / 简单显示」就是主游戏 H 场景男主半透明的实现：
+
+- `OCIChar.SetVisibleSimple(true)` → 隐藏正常身体，改用模型自带的 `S_SimpleBody` 替身；
+- `OCIChar.SetSimpleColor(Color)` → 设替身的 `_Color`（**alpha 就是透明度**）。
+
+身体走这条路；衣服/饰品仍走材质（替身只覆盖身体），并且改成**遍历 shader 属性**
+找所有名字含 alpha/opacity/transparen 的 Float/Range 来设值，不再硬编码 `"alpha"`。
+仍改不到时会把该 shader 的属性名打进日志，下次能直接看到真名。
+
+---
+
+## [作废] 2.4.3
+
+### 修正：male 半透明改用 KKUSSalpha（衣服不透明 + 头发变白）
+
+2.4.2 把所有材质换成 `main_alpha`，结果衣服还是不透明、头发还变白。按实际测试改：
+
+- 统一换成 **`KKUSSalpha`**（KKUSS 包里的透明版 shader，
+  manifest：`Shader Name="KKUSSalpha" AssetBundle="chara/kkussalpha.unity3d"`），
+  然后直接改它的 **`alpha`** 属性（小写、无下划线）。
+- **换 shader 之前先迁移属性**：原生 shader 是 `_MainTex`/`_Color`，KKUSS 是
+  `MainTex`/`Color`。不先读旧值就换，贴图会全部丢掉 —— 头发变白就是这个原因。
+- KKUSSalpha 平时没有材质引用、`Shader.Find` 拿不到，所以补了一条
+  MaterialEditor 的 `LoadedShaders` 字典兜底（zipmod manifest 注册的 shader 都在里面）。
+
+### 修正：只限制「角色光照」，不是全局光照
+
+2.4.2 把所有 `Light` + `RenderSettings.ambientIntensity` + 所有灯光道具都压到 1.0，
+范围过大。实际上 Koikatsu 的 KKUSS/KKUTS 几乎只吃 `CameraLightCtrl` 里那盏角色灯
+（`LightCalc.light`），场景地图灯影响很小。现在只 clamp 这一盏：
+
+- 反射取 `CameraLightCtrl.lightChara`（LightCalc）→ `light`（Light），
+  亮度 > 1.0 就压到 1.0；
+- 同步面板上的 `sliderIntensity` / `inputIntensity`，UI 不会还显示旧值；
+- **不再动**场景灯、环境光、灯光道具。
+
+### 新增：KKUSS 过曝抑制（Addcolor clamp）
+
+浅色衣物整片白掉的另一个直接来源是 KKUSS 材质的 `Addcolor`（加色，默认 1,1,1,1）。
+角色卡常把它调到 1.2~2，配上强光就糊成一片。现在导出时把所有 KKUSS 系材质的
+`Addcolor` 的 RGB clamp 到 1.0（只压不抬，不动 Color / MainTex）。
+
+---
+
+## [作废] 2.4.2
+
+### 修复：male 半透明把皮肤/衣服换成了道具 shader（像换了个人）
+
+2.4.1 的 shader 查找是「优先 main_item_alpha」，结果**所有材质**（包括皮肤、衣服）
+都被换成 `main_item_alpha` —— 那是道具用的 shader，没有皮肤阴影、腮红、衣服图案，
+所以看起来像换了一个人。现在按原 shader 类型映射：
+
+- 原 shader 名含 `item` → `main_item_alpha`
+- 其它（skin / clothes / hair）→ `main_alpha`
+- 找不到对应透明版就**不换 shader**（只尝试改 alpha/混合），宁可不够透也不破坏外观
+
+日志会打印「换 shader N / 无对应透明版 N / 无颜色属性 N」以及每个 male 材质的原 shader 名，
+方便下次直接看出映射对不对。
+
+### 新增：场景全局光照一律封顶 1.0
+
+场景卡经常把灯强度调到 2~8，配上 KKUSS 这类对光照敏感的 shader，浅色衣服/帽子/袜子
+会整片过曝。现在在**换人之前**统一封顶：
+
+- 场景里所有 `Light`（地图 P-MODMAP 灯、相机灯、Character Lighting 的灯）；
+- `RenderSettings.ambientIntensity`（Unity 环境光）；
+- `OCILight` 的保存值 `lightInfo.intensity`（同步树面板上的滑块）。
+
+只压不抬，已经很暗的灯保持原样。日志会报「Light N 个 / 环境光 N / 灯光道具 N 个」。
+
+---
+
+## [作废] 2.4.1
+
+### 修正：换装卡的隐藏 female 一律用主角色卡（2.4.0 的判定对 #06 不生效）
+
+2.4.0 只处理「objectEnabled 通道里 value=true」的隐藏角色。但实际换装卡不是这么做的：
+hongcha #06 有 9 个 female，timeline 里只有 **1 个** objectEnabled 通道，
+其余 7 个隐藏 female 的入场靠的是 `guideObjectPos`/`guideObjectRot`（位置动画），
+甚至 `bonePos`/表情曲线 —— 所以 2.4.0 一个都识别不到，日志永远是
+「跳过 8 个真隐藏角色」。
+
+现在改成两步，且都在替换之前完成：
+
+1. **先标记**：读 Timeline 运行时数据，凡是某个 female 有**任意**插值项
+   （位置/旋转/骨骼/表情/显隐），就标记为「在 timeline 里出现过」；
+2. **再替换**：显示中的 female 照旧按主/次卡顺序分配；**隐藏的 female 一律用主角色卡**
+   （不消耗次卡序号），主卡没选时退回上一个显示角色的卡，再不行用次卡兜底。
+
+这样换装前后是同一个人，也不会再出现「隐藏角色被全部跳过」。
+日志会打印每个角色的 `inTimeline`，替换完成时会分别统计
+「显示用主卡 / 显示用次卡 / 隐藏用主卡」。
+
+### 修复：male 半透明找不到透明 shader
+
+`Shader.Find("Shader Forge/main_alpha")` 在 KKS 里返回 null —— 因为 main_alpha 平时
+没有被任何材质引用，没加载进显存。现在改用
+`Resources.FindObjectsOfTypeAll<Shader>()` 在**已加载的全部 shader** 里挑
+（优先 `main_item_alpha` / `main_alpha`，其次任何带 alpha 的），
+再退回常见名字，最后用 Unity 内置透明 shader 兜底。

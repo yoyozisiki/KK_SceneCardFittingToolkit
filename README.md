@@ -35,6 +35,25 @@ Koikatsu Sunshine（KKS）CharaStudio 的插件。
 界面要的数据一律问后端（`SceneCatalog` / `CardPool` / `CardLibrary` / `AutoExport`），
 界面自己不再持有业务状态。
 
+## 编译
+
+需要 .NET SDK 8（本机固定在 `D:\game\LL\dotnet8`，已加入 PATH 与 `DOTNET_ROOT`）。
+
+```
+dotnet build -c Release
+```
+
+`csproj` 里的 `DeployPlugin` 目标会在**每次编译结束后**自动把 dll 铺到两处：
+
+- 游戏目录 `BepInEx\plugins\kk_scenecardfittingtoolkit.dll`
+- 仓库 `output\BepInEx\plugins\kk_scenecardfittingtoolkit.dll`
+
+只编译不部署：`dotnet build -c Release -p:SkipDeploy=true`。
+游戏正在运行、dll 被占用时只警告，不影响编译成功，关掉 CharaStudio 再编一次即可。
+
+也可以双击 `build.bat`（或执行 `.\build.ps1`）：编译 + 部署 + 哈希校验 + 打印版本号，
+支持 `-Rebuild` 强制重编、`-SkipDeploy` 只编译。
+
 ## 交付目录 `output/`
 
 `output/` 里是按游戏目录结构摆好的成品：插件 dll + VideoExport（含 ffmpeg）+ KKSAPI / KKSPE / Timeline

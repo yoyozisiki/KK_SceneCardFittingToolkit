@@ -114,4 +114,35 @@
     </Reference>
   </ItemGroup>
 
+  <!-- ========================================================== 构建后部署
+       dotnet build 一跑完就把 dll 铺到两处：游戏插件目录 + 仓库里的 output/。
+         · 只编译不部署：dotnet build -p:SkipDeploy=true
+         · 目标目录不存在只提示、不报错（换机器 / CI 也能编）
+         · 游戏在运行、dll 被占用时只警告，不影响编译结果 -->
+  <PropertyGroup>
+    <DeployFileName>kk_scenecardfittingtoolkit.dll</DeployFileName>
+    <DeployGameDir Condition="'$(DeployGameDir)' == ''">$(GameDir)\BepInEx\plugins</DeployGameDir>
+    <DeployOutputDir Condition="'$(DeployOutputDir)' == ''">$(MSBuildProjectDirectory)\output\BepInEx\plugins</DeployOutputDir>
+  </PropertyGroup>
+
+  <Target Name="DeployPlugin" AfterTargets="Build" Condition="'$(SkipDeploy)' != 'true'">
+    <Copy SourceFiles="$(TargetPath)"
+          DestinationFiles="$(DeployGameDir)\$(DeployFileName)"
+          SkipUnchangedFiles="true" ContinueOnError="WarnAndContinue"
+          Condition="Exists('$(DeployGameDir)')" />
+    <Message Importance="high" Condition="Exists('$(DeployGameDir)')"
+             Text="  [部署] 游戏目录  → $(DeployGameDir)\$(DeployFileName)" />
+    <Warning Condition="!Exists('$(DeployGameDir)')"
+             Text="[部署] 跳过：游戏插件目录不存在（$(DeployGameDir)）" />
+
+    <Copy SourceFiles="$(TargetPath)"
+          DestinationFiles="$(DeployOutputDir)\$(DeployFileName)"
+          SkipUnchangedFiles="true" ContinueOnError="WarnAndContinue"
+          Condition="Exists('$(DeployOutputDir)')" />
+    <Message Importance="high" Condition="Exists('$(DeployOutputDir)')"
+             Text="  [部署] output     → $(DeployOutputDir)\$(DeployFileName)" />
+    <Warning Condition="!Exists('$(DeployOutputDir)')"
+             Text="[部署] 跳过：output 目录不存在（$(DeployOutputDir)）" />
+  </Target>
+
 </Project>
