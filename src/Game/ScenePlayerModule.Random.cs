@@ -17,37 +17,11 @@ namespace KKPEHeightLock
         private static string _rndFemaleSubdir = "";
         private static string _rndMaleSubdir = "";
 
-        /// <summary>设置随机女卡目录子目录(多级追加;空串=回到根)。</summary>
-        public static void SetRandomFemaleSubdir(string subdir)
-        {
-            if (string.IsNullOrEmpty(subdir)) { _rndFemaleSubdir = ""; return; }
-            _rndFemaleSubdir = string.IsNullOrEmpty(_rndFemaleSubdir) ? subdir : _rndFemaleSubdir + "/" + subdir;
-        }
-
-        /// <summary>设置随机男卡目录子目录(多级追加;空串=回到根)。</summary>
-        public static void SetRandomMaleSubdir(string subdir)
-        {
-            if (string.IsNullOrEmpty(subdir)) { _rndMaleSubdir = ""; return; }
-            _rndMaleSubdir = string.IsNullOrEmpty(_rndMaleSubdir) ? subdir : _rndMaleSubdir + "/" + subdir;
-        }
-
         /// <summary>随机女卡子目录显示名。</summary>
         public static string RandomFemaleSubdirLabel() { return string.IsNullOrEmpty(_rndFemaleSubdir) ? L10n.T("女卡根") : _rndFemaleSubdir; }
 
         /// <summary>随机男卡子目录显示名。</summary>
         public static string RandomMaleSubdirLabel() { return string.IsNullOrEmpty(_rndMaleSubdir) ? L10n.T("男卡根") : _rndMaleSubdir; }
-
-        /// <summary>列出随机女卡目录的直接子文件夹。</summary>
-        public static System.Collections.Generic.List<string> ListRandomFemaleSubdirs()
-        {
-            return ListSubdirsOf(string.IsNullOrEmpty(KKPEHeightLockPlugin.RandomFemaleDir.Value) ? "UserData/chara/female" : KKPEHeightLockPlugin.RandomFemaleDir.Value, _rndFemaleSubdir);
-        }
-
-        /// <summary>列出随机男卡目录的直接子文件夹。</summary>
-        public static System.Collections.Generic.List<string> ListRandomMaleSubdirs()
-        {
-            return ListSubdirsOf(string.IsNullOrEmpty(KKPEHeightLockPlugin.RandomMaleDir.Value) ? "UserData/chara/male" : KKPEHeightLockPlugin.RandomMaleDir.Value, _rndMaleSubdir);
-        }
 
         private static System.Collections.Generic.List<string> ListSubdirsOf(string baseDir, string subdir)
         {

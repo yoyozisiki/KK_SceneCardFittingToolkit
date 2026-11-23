@@ -7,24 +7,10 @@ using System.Text;
 namespace KKPEHeightLock
 {
     /// <summary>
-    /// 直接从场景卡文件里读 Timeline 插件的时长，不用加载场景。
-    ///
-    /// 移植自 python_tools/4_AutoSceneExport/autoexport/timeline.py。
-    /// 场景卡是 PNG + 尾部 MessagePack，Timeline 的数据在扩展块里：
-    ///
-    ///     ... \xa8timeline  &lt;版本&gt; ... sceneInfo "&lt;XML&gt;" ...
-    ///
-    /// XML 形如：
-    ///
-    ///     &lt;root duration="10" blockLength="10" divisions="10" timeScale="1"&gt;
-    ///       &lt;keyframe time="0" .../&gt;
-    ///     &lt;/root&gt;
-    ///
-    /// `duration` 是时间轴结束时间（秒），`timeScale` 是播放倍速，
-    /// 实际秒数 = duration / timeScale。
-    ///
-    /// 为什么要读文件而不是问运行时的 Timeline 插件：没加载的场景卡查不到，
-    /// 而且插件在「这张卡没有时间轴」时返回的是默认 10 秒而不是 0，没法用来判断。
+    /// 直接从场景卡文件（PNG 尾部的 MessagePack 扩展块）读 Timeline 的时长和
+    /// 「会被取消隐藏的对象」，不用加载场景。
+    /// XML 里 duration 是结束时间、timeScale 是倍速，实际秒数 = duration / timeScale。
+    /// 不靠运行时插件判断时长：没加载的卡查不到，且没有时间轴时插件返回的是默认 10 秒。
     /// </summary>
     public static class TimelineReader
     {
@@ -45,21 +31,6 @@ namespace KKPEHeightLock
                     if (timeScale <= 0.0001f) return Math.Max(duration, 0f);
                     return Math.Max(duration, 0f) / timeScale;
                 }
-            }
-
-            public string Describe()
-            {
-                var sb = new StringBuilder();
-                sb.Append(L10n.T("时间轴 ")).Append(Seconds.ToString("0.00")).Append("s");
-                if (Math.Abs(timeScale - 1f) > 0.0001f)
-                    sb.Append(L10n.T("（duration ")).Append(duration.ToString("0.###"))
-                      .Append(L10n.T(" × 倍速 ")).Append(timeScale.ToString("0.###")).Append(L10n.T("）"));
-                sb.Append(" · ").Append(keyframes).Append(L10n.T(" 关键帧"));
-                if (lastKey > Seconds + 0.5f)
-                    sb.Append(L10n.T("（⚠ ")).Append(lastKey.ToString("0.#"))
-                      .Append(L10n.T("s 处仍有关键帧，超出 duration 不会播放）"));
-                if (truncated) sb.Append(L10n.T("（⚠ 卡片数据被截断，关键帧可能不全）"));
-                return sb.ToString();
             }
         }
 
@@ -85,8 +56,6 @@ namespace KKPEHeightLock
         private static readonly Dictionary<string, Info> Cache = new Dictionary<string, Info>();
         // 同一张卡也会被反复问「哪些角色会被 timeline 取消隐藏」，同样缓存。
         private static readonly Dictionary<string, HashSet<int>> RevealCache = new Dictionary<string, HashSet<int>>();
-
-        public static void ClearCache() { Cache.Clear(); RevealCache.Clear(); }
 
         /// <summary>读一张卡的 Timeline；没有时间轴返回 null。结果会缓存。</summary>
         public static Info Read(string path)
@@ -137,14 +106,9 @@ namespace KKPEHeightLock
         // ---------------------------------------------------------------- 取消隐藏的对象
         /// <summary>
         /// 读一张卡里「会被 Timeline 取消隐藏」的对象编号集合，没有时间轴返回空集合。
-        ///
-        /// Timeline 控制对象显隐靠 objectEnabled 通道，它直接写
-        /// <c>oci.treeNodeObject.visible</c>。value=true 表示显示、false 表示隐藏。
-        /// 一个初始隐藏的 female，只要它的 objectEnabled 通道里出现过 true 关键帧，
-        /// 就说明播放中会被「取消隐藏」—— 它和上一个显示的角色是前后关系（同一人的下一套造型），
-        /// 应跟前一个显示的角色用同一张替换卡。
-        ///
-        /// 结果会缓存；读文件的方式和时长一致（先尾部、再整文件）。
+        /// Timeline 靠 objectEnabled 通道写 treeNodeObject.visible，出现过 true 关键帧
+        /// 就说明播放中会显示 —— 这类隐藏角色和上一个显示角色是前后关系（同一人的下一套造型）。
+        /// 结果会缓存。
         /// </summary>
         public static HashSet<int> ReadRevealedObjects(string path)
         {
@@ -412,9 +376,8 @@ namespace KKPEHeightLock
             info.keyframes = count;
             info.lastKey = last;
 
-            // 极少见的格式：没有 <keyframe> 标签，但还有别的 time="…"。
-            // 和 autoexport/timeline.py 一样退回宽匹配（会把 curveKeyframe 也数进来，
-            // 数字偏大，但至少不是 0，不会把有动画的卡当成静态卡）。
+            // 极少见的格式：没有 <keyframe> 标签，退回宽匹配（会把 curveKeyframe 也数进来，
+            // 数字偏大但不会是 0，有动画的卡不会被当成静态卡）。
             if (count == 0)
             {
                 int q = 0;

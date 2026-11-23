@@ -539,12 +539,5 @@ namespace KKPEHeightLock
             if (string.IsNullOrEmpty(s)) return "";
             return s.Replace("(Instance)", "").Replace("(Clone)", "").Trim();
         }
-
-        /// <summary>换卡 / 换皮肤卡时清掉内存副本。</summary>
-        public static void Invalidate()
-        {
-            _cache = null;
-            _cacheKey = null;
-        }
     }
 }

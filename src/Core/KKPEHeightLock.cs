@@ -23,7 +23,7 @@ namespace KKPEHeightLock
     {
         public const string GUID = "com.kkpeheightlock";
         public const string PluginName = "Scene Card Fitting Toolkit";
-        public const string Version = "2.4.0";
+        public const string Version = "2.4.1";
 
         internal static ManualLogSource Log;
         internal static KKPEHeightLockPlugin Instance;
@@ -152,9 +152,7 @@ namespace KKPEHeightLock
             L10n.Refresh(UiLanguage.Value);
 
             // ------------------------------------------------------------ 批量导出
-            // 不再绑快捷键：F9 被 ReShade 截图占用，F8 / Ctrl+F8 又和别的插件撞。
-            // 批量导出窗口只从工具栏按钮打开（Studio 左下角那个按钮），
-            // 面板右上角有关闭按钮，所以不需要键盘。
+            // 批量导出面板只从工具栏按钮打开，没有快捷键（F9 被 ReShade 占用，F8 又和别的插件撞）
             ExportSceneDir = Config.Bind("AutoExport", "SceneDir", "UserData/studio/scene",
                 "批量导出扫描场景卡的目录（递归包含子目录）。");
             ExportFemaleCard = Config.Bind("AutoExport", "FemaleCard", "",
@@ -222,10 +220,8 @@ namespace KKPEHeightLock
                 "输出宽度（0 = 用游戏当前窗口尺寸；要和高度一起填）。");
             ExportResizeHeight = Config.Bind("AutoExport", "ResizeHeight", 0,
                 "输出高度（0 = 用游戏当前窗口尺寸）。");
-            // 泛光/暗角强度**不再由插件配置**：以前这里的 Vignette/Bloom 两个档位会在
-            // 每次导出时写进 ReShade 预设，把手调的值冲掉，已整体删除。
-            // 要用什么强度，就在 ReShade 面板（Home）里调，插件只读不写。
-                                    ExportMerge = Config.Bind("AutoExport", "Merge", true,
+            // 泛光/暗角强度归 ReShade 面板，插件不配、也不写预设
+            ExportMerge = Config.Bind("AutoExport", "Merge", true,
                 "全部录完后把各段合并成一个 mp4。");
             ExportKeepSegments = Config.Bind("AutoExport", "KeepSegments", true,
                 "保留每张场景卡单独的片段。");
@@ -236,10 +232,8 @@ namespace KKPEHeightLock
                 "逐帧录制时关掉垂直同步、放开帧率上限，让引擎尽快出帧。"
                 + "关掉就按显示器刷新率走（更稳但更慢）。");
 
-            // 路径类配置自愈：BepInEx 读 cfg 时会把 \a \b \f \n \r \t \v 当转义序列，
-            // 于是 ...\female\animfriend.png 读回来是 "female"+BEL+"nimfriend.png"，
-            // 面板直接黑掉（Path.GetFileName 抛非法字符）、卡也加载不出来。
-            // 这里把旧值就地修好，并统一写成 /，以后读回来就不会再被转义。
+            // 路径类配置自愈：BepInEx 读 cfg 会把 \a \b 之类当转义吃掉，
+            // 这里就地修好并统一存成 /。
             MigratePath("FemaleCard", ExportFemaleCard);
             MigratePath("SubCards", ExportSubCards);
             MigratePath("OutputDir", ExportOutputDir);
@@ -289,8 +283,7 @@ namespace KKPEHeightLock
         private void Start()
         {
             StudioSaveLoadApi.SceneLoad += OnSceneLoad;
-            // 同一个事件也用来判断「Studio 启动完成」：它启动时会载入默认场景，
-            // 那一次触发就代表初始化走完了。订阅要早，否则会漏掉。
+            // 同一个事件也用来判断「Studio 启动完成」：订阅要早，否则会漏掉默认场景那次
             AutoExport.HookSceneLoadEvent();
             ConfigPanel.Init(this);
         }
@@ -303,8 +296,7 @@ namespace KKPEHeightLock
 
         private void Update()
         {
-            // 导出中按 ESC = 暂停 / 继续（面板在 ReShade 通路下是隐藏的，
-            // 光靠按钮停不下来，这是唯一能随时按的刹车）
+            // 导出中按 ESC = 暂停 / 继续（ReShade 通路下面板是隐藏的，这是唯一能随时按的刹车）
             AutoExport.TickPauseKey();
 
             if (ToggleKey.Value.IsDown())

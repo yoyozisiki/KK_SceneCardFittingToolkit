@@ -292,10 +292,8 @@ namespace KKPEHeightLock
 
             /// <summary>
             /// 写一整套录制参数。返回 false = 没绑上实例。
-            ///
-            /// frameLimit 用「帧数」而不是「秒数」限长：逐帧渲染下我们自己控制节奏，
-            /// VideoExport 只需要在采够 frameLimit 帧时收尾。秒数模式它按墙钟算，
-            /// 渲染一掉帧就少录，正是「没有达到预期帧数」的来源。
+            /// frameLimit 用帧数而不是秒数：逐帧渲染下节奏由我们控制，
+            /// VideoExport 只需采够帧数收尾。
             /// </summary>
             public static bool Configure(ExportOptions o, string outFolder, int frameLimit,
                                          bool settlePhysics)
@@ -324,15 +322,9 @@ namespace KKPEHeightLock
                 Set(_fRealign, false);
                 if (_fPrewarm != null) Set(_fPrewarm, 0);
 
-                // 「物理稳定」预滚：VideoExport 的 PreRollCapture 在开录前会
-                // Timeline.Play() 空跑 _fps 帧（整整 1 秒），让动态骨骼把换人/
-                // 换装留下的惯性耗掉，再开始截帧。旧脚本一直开着它（默认 true），
-                // 这也是它头发不飞的另一半原因 —— 我们之前为了「第一帧要 0 秒」
-                // 把它关了，结果开录那一下的姿态瞬移直接被录进第 0 帧。
-                //
-                // 现在只在**短卡循环补齐**时打开：那种卡时间轴比片长短，多跑 1 秒
-                // 只是换个循环相位，看不出来；长卡从头放到尾，跑 1 秒会真的丢掉
-                // 开头 1 秒、结尾冻 1 秒，所以长卡仍然关掉，靠我们自己的等待兜。
+                // 「物理稳定」预滚：VideoExport 开录前会 Play() 空跑 1 秒让动骨静下来。
+                // 只在短卡循环补齐时打开（多跑 1 秒只是换个循环相位）；长卡会丢掉开头 1 秒，
+                // 所以关掉，靠我们自己的等待兜。
                 if (_fSettlePhysics != null) Set(_fSettlePhysics, settlePhysics);
 
                 Set(_fAutoVideo, true);
@@ -367,9 +359,8 @@ namespace KKPEHeightLock
                     Set(_fFramesFolder, frames);
                 }
 
-                // 截图插件：本机 KKS_Screencap 版本不匹配（每帧 MissingMethodException，
-                // 而且出的帧尺寸和 VE 声明的 2560x1440 对不上，ffmpeg 直接编不出流），
-                // 所以默认强制走内置的 Unity ScreenCapture。
+                // 截图插件：KKS_Screencap 版本不匹配（每帧 MissingMethodException、帧尺寸也对不上），
+                // 所以固定走 VideoExport 内置的截图通路。
                 if (_fSelectedPlugin != null)
                 {
                     try { Set(_fSelectedPlugin, o.ScreenshotPluginIndex); }

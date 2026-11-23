@@ -14,8 +14,7 @@ public static partial class ConfigPanel
     {
         internal static void OnGUI()
         {
-            // ReShade 实时效果通路下，截图抓的是 present 之后的最终画面，
-            // 本插件的 IMGUI 会被一起录进视频 —— 所以导出期间整个不画。
+            // ReShade 通路下截图抓的是最终画面，本插件的 IMGUI 会被录进视频，导出期间不画
             if (AutoExport.SuppressGui)
             {
                 UiClickBlock.Hide();
@@ -26,22 +25,18 @@ public static partial class ConfigPanel
             ThumbCache.Tick(3);
 
             // 整体缩放(VR 用):矩阵缩放后,所有控件/文字等比放大
-            float scale = Mathf.Max(0.5f, KKPEHeightLockPlugin.UIScale.Value);
-            var oldMatrix = GUI.matrix;
+            float scale = Mathf.Max(0.5f, KKPEHeightLockPlugin.UIScale.Value);            var oldMatrix = GUI.matrix;
             if (scale != 1f)
                 GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(scale, scale, 1f));
 
-            // 完全自研窗口交互:不用 GUI.Window 返回值(会与我们的修改冲突)。
-            // 拖动/resize 都在窗口函数内用绝对坐标处理。
+            // 自研窗口交互：不用 GUI.Window 返回值，拖动/resize 在窗口函数内按绝对坐标处理
             if (_windowVisible)
                 GUI.Window(WindowId, _windowRect, DrawWindow, L10n.T("场景卡套档工具箱"));
 
             // 批量导出窗口（同一套缩放矩阵，保证和主窗口比例一致）
             AutoExportPanel.OnGUI();
 
-            // 选卡 / 选目录弹框必须**最后画、并且 depth 更低**：
-            // 批量导出面板自己把 GUI.depth 压到 -2000 抢事件，弹框要是画在它前面，
-            // 就会被整块盖住 —— 表现就是「点一下后面就被盖到下面去了」。
+            // 选卡 / 选目录弹框最后画、depth 更低，否则会被批量导出面板整块盖住
             if (_cardPickerVisible || _subdirPickerVisible)
             {
                 int oldDepth = GUI.depth;
@@ -64,9 +59,8 @@ public static partial class ConfigPanel
 
             GUI.matrix = oldMatrix;
 
-            // 最后铺点击拦截层：所有窗口/弹框的矩形都在这时候才是最新的一帧。
-            // 少了这一步，鼠标点在插件界面上会**同时**点到后面的工作室界面
-            // （最要命的是点到「保存」，点一下折叠箭头就把场景存了）。
+            // 最后铺点击拦截层：窗口矩形这时才是最新一帧的。
+            // 少了这一步，点插件界面会同时点到后面的工作室界面（比如点到「保存」）。
             SyncClickBlock(scale);
         }
 
@@ -367,10 +361,8 @@ public static partial class ConfigPanel
             HandleWindowInteraction();
         }
 
-        /// <summary>窗口交互(拖动 + 右下角 resize)。
-        /// 在窗口函数末尾调用:此时按钮/Toggle 已消费它们的 MouseDown(事件类型变 Used),
-        /// 所以这里只会响应"空白处"的按下,不会误拖控件。
-        /// 鼠标坐标(e.mousePosition)与 _windowRect 都是全局屏幕坐标,直接用绝对坐标计算。</summary>
+        /// <summary>窗口交互（拖动 + 右下角 resize）。在窗口函数末尾调用：
+        /// 此时按钮/Toggle 已消费各自的 MouseDown，这里只会响应空白处按下。</summary>
         private static void HandleWindowInteraction()
         {
             var e = Event.current;

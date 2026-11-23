@@ -37,7 +37,7 @@ namespace KKPEHeightLock
             {
                 float t = Timeline.Timeline.playbackTime;
                 float d = Timeline.Timeline.duration;
-                return string.Format("{0:0.0}/{1:0.0} {2}x", t, d, _timeScale);
+                return string.Format("{0:0.0}/{1:0.0}", t, d);
             }
             catch (Exception) { return L10n.T("Timeline 未加载"); }
         }

@@ -84,12 +84,6 @@ namespace KKPEHeightLock
             return new Rect(tile.x + 2f, tile.y + 2f, 20f, 20f);
         }
 
-        /// <summary>右上角的小按钮（整目录加入等）。</summary>
-        public static Rect CornerButtonRect(Rect tile, float w)
-        {
-            return new Rect(tile.xMax - w - 2f, tile.y + 2f, w, 18f);
-        }
-
         /// <summary>把纹理等比画进正方形框里（居中）。</summary>
         public static void DrawImage(Rect box, Texture2D tex)
         {

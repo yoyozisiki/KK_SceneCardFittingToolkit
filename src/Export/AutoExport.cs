@@ -6,18 +6,13 @@ using UnityEngine;
 namespace KKPEHeightLock
 {
     /// <summary>
-    /// 游戏内批量导出：把 python_tools/4_AutoSceneExport 那套「外部脚本 + 模拟热键」
-    /// 的流程搬到进程内，逐张场景卡出片、最后合并成一个 mp4。
+    /// 游戏内批量导出：逐张加载场景卡 → 替换角色/服装 → 逐帧驱时间轴录制 → 合并成一个 mp4。
     ///
-    /// 和外部脚本的关键差别（也照搬了 TRAE 那份可行性报告的结论）：
-    ///   * 换场景走 Studio.LoadSceneCoroutine，并且**手动 MoveNext** 驱动 ——
-    ///     加载协程里一旦有插件抛异常，交给 Unity 调度会把整条链掐掉，我们就永远等不到结束。
-    ///   * VideoExport 用 **帧数模式**当外壳：限长只负责「采够 N 帧就收尾」，
-    ///     时间轴完全由我们逐帧 seek 驱动（时间轴 1 秒 = fps 帧），渲染快慢不影响成片。
-    ///     用秒数模式它按墙钟算，渲染一掉帧就少录，就是「没有达到预期帧数」的来源。
-    ///   * VideoExport 的限长/输出目录都是**私有字段**，用反射写，不重启游戏、不改 cfg。
-    ///   * 后期（泛光/暗角/淡入淡出）用 ffmpeg 在编码后统一烤进成片，
-    ///     滤镜串和 python_tools/6_视频后期 完全一致，所以出片观感一样。
+    /// 关键设计：
+    ///   · 换场景用手动 MoveNext 驱动 Studio.LoadSceneCoroutine，避免加载协程被 Unity 掐断；
+    ///   · VideoExport 用「帧数」限长，时间轴由我们逐帧推进，渲染快慢不影响成片；
+    ///   · VideoExport 的私有字段全部反射写，不重启游戏、不改 cfg；
+    ///   · 泛光/暗角由 ReShade 实时出、淡入淡出由屏上黑场出，成片不再重编码。
     /// </summary>
     public static partial class AutoExport
     {
@@ -29,10 +24,8 @@ namespace KKPEHeightLock
         public static bool PreviewMode { get; private set; }
 
         /// <summary>
-        /// 暂停中（ESC 切换）。暂停时整条流水线停在原地等，随时可以继续：
-        ///   · 正在录的那张卡会被**放弃重录** —— ffmpeg 的管道已经开了，
-        ///     半截视频接不回去，硬接着录只会得到前面冻住的一段；
-        ///   · 已经录完的片段全都留着，继续后从这张卡重新开始。
+        /// 暂停中（ESC 切换）：整条流水线停在原地等，随时可继续。
+        /// 正在录的那张卡会被放弃重录（ffmpeg 管道接不回去），已录好的片段全部保留。
         /// </summary>
         public static bool Paused { get; private set; }
 
@@ -42,12 +35,9 @@ namespace KKPEHeightLock
         private static bool _suppressGui;
 
         /// <summary>
-        /// 导出中要不要把本插件的界面藏起来。
-        /// 走 ReShade 实时效果时必须藏：Reshade 截图抓的是 present 之后的**最终画面**，
-        /// IMGUI 会原封不动被录进视频（实测日志窗口糊满左上角一大片）。
-        /// 走 Screencap 时抓的是相机 RenderTexture，不含 UI，所以不用藏、进度条可以正常看。
-        ///
-        /// 暂停时例外：这时候没在录，界面必须露出来，否则连「停止」都点不到。
+        /// 导出中是否隐藏本插件界面。
+        /// ReShade 通路抓的是 present 之后的最终画面，IMGUI 会被录进视频，必须藏；
+        /// 暂停时例外，否则连「停止」都点不到。
         /// </summary>
         public static bool SuppressGui { get { return Running && _suppressGui && !Paused; } }
 
@@ -86,21 +76,13 @@ namespace KKPEHeightLock
         public static float FadeBlack { get; private set; }
 
         /// <summary>
-        /// 画实时淡入淡出的全屏黑场。
-        ///
-        /// 走 ReShade 实时通路时，截图抓的是 present 之后的**最终画面**，
-        /// 所以 IMGUI 画的这层纯黑会被原样录进视频 —— 淡入淡出就白送，
-        /// 后期那条 ffmpeg（整片重编码，1440p60 一段 4~7 秒）可以整段砍掉。
-        ///
-        /// 必须在 `SuppressGui` 判断**之前**调用：导出期间本插件自己的界面要藏，
-        /// 但这层黑场恰恰是唯一需要留在画面上的东西。
+        /// 画全屏黑场（实时淡入淡出）。必须在 SuppressGui 判断之前调用：
+        /// 导出期间插件界面要藏，但这层黑场恰恰要留在画面上。
         /// </summary>
         public static void DrawFadeOverlay()
         {
             if (FadeBlack <= 0.001f) return;
-            // GUI.depth 越小越靠上。别的插件（日志覆盖层之类）默认 depth = 0，
-            // 会在我们这层黑场之后画，黑底上就浮出一片白字。
-            // 把黑场压到 -1000，它就永远盖在最上面，淡入淡出才是干净的黑。
+            // GUI.depth 越小越靠上：压到 -1000，保证黑场盖在其他插件的日志覆盖层之上
             int oldDepth = GUI.depth;
             GUI.depth = -1000;
             Color old = GUI.color;
@@ -123,13 +105,8 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 是不是要在时间轴一开播就按住它。
-        ///
-        /// 场景卡一加载完，Timeline 会自己从 0 开始播。等我们的加载协程返回再
-        /// `Seek(0)`，中间已经过去几百毫秒 —— 那一次 Seek 等于把骨骼整段拉回去，
-        /// 动态骨骼（头发/裙子）惯性直接炸开，成片开头头发就是「飞起来」的样子。
-        /// 旧脚本用的是同一招：`tl_hold(true)`，插件的 Update 里
-        /// 「一看到 isPlaying 就 Pause」，所以时间轴最多走一两帧。
+        /// 加载场景期间按住时间轴：场景一加载完 Timeline 会自动开播，等加载协程返回再
+        /// Seek(0) 会把骨骼整段拉回去、动态骨骼惯性炸开，所以一看到播放就暂停。
         /// </summary>
         internal static bool HoldTimeline;
 
@@ -224,16 +201,8 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 等 Studio 启动完成。
-        ///
-        /// 不用固定秒数，用 Studio 自己的信号：
-        ///   · 拿得到 `Studio.Studio` 和主相机；
-        ///   · KKAPI 的 `SceneLoad` 至少触发过一次 —— Studio 启动时会把默认场景读进来，
-        ///     这一次触发就代表它自己的初始化走完了。订阅在插件 Start 里，
-        ///     所以哪怕事件在我们开始导出之前就发生，计数也留得住。
-        ///
-        /// `StartupDelay` 只当**上限**：正常十几秒就开跑；万一某台机器没装默认场景
-        /// 插件、事件永远不来，到上限就带警告照跑，不会卡死。
+        /// 等 Studio 启动完成：拿得到 Studio 实例和主相机就算就绪；
+        /// StartupDelay 只当上限，到点带警告照跑，不卡死。
         /// </summary>
         private static IEnumerator WaitStudioReady()
         {
@@ -256,9 +225,8 @@ namespace KKPEHeightLock
                 }
                 catch (Exception) { hasStudio = false; }
 
-                // 只要 Studio 实例和主相机都在就直接开跑。
-                // 不再要求「KKAPI 的 SceneLoad 触发过」——那个事件只在导出流程里才订阅，
-                // 长时间开着的 Studio 永远收不到，结果每次都干等满上限（实测 60 秒）。
+                // 只要 Studio 实例和主相机都在就直接开跑（不再等 KKAPI 的 SceneLoad，
+                // 长时间开着的 Studio 永远收不到那个事件）
                 if (hasStudio) break;
 
                 if (Time.realtimeSinceStartup - t0 >= ceiling)
@@ -315,12 +283,9 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 停止：**立刻中断**，不再往下做。
-        ///
-        /// 语义（和暂停的区别）：
-        ///   · 暂停 = 停在原地，随时可以继续；正在录的那张卡丢弃重录，已录好的片段保留。
-        ///   · 停止 = 不再继续。正在换人/换装 → 下一个检查点立刻退出，不再替换；
-        ///     正在录制 → 让 VideoExport 收尾（管道不能硬切），当前这张丢弃，已完成的合并。
+        /// 停止：立刻中断，不再往下做。
+        /// 正在换人/换装 → 下一个检查点退出；正在录制 → 让 VideoExport 收尾，当前这张丢弃，
+        /// 已完成的片段照常合并。
         /// </summary>
         public static void Cancel()
         {
@@ -334,9 +299,7 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 预览：切到勾选的第一个场景，走完和导出**完全一样**的准备流程
-        /// （加载 → 替换 female → 换装 → 姿态 → 碰撞体 → 去码 → 去遮挡物 → 等物理稳定），
-        /// 但**不调用 VideoExport 录制**、也不隐藏界面。用来在正式导出前确认效果。
+        /// 预览：对第一个勾选的场景走完和导出完全一样的准备流程，但不录制、不隐藏界面。
         /// </summary>
         public static bool StartPreview(MonoBehaviour host, ExportOptions opts)
         {
@@ -372,10 +335,7 @@ namespace KKPEHeightLock
 
         /// <summary>
         /// 确保皮肤材质缓存存在（预览和批量都要先调）。
-        ///
-        /// 拿模板卡材质本来只能 `Studio.AddFemale` 临时加载一个角色，而那个动作会重建
-        /// 场景对象、冲掉隐藏角色的显隐。所以只在**缓存不存在**时做一次，提取完存到
-        /// `BepInEx/config/SkinCache/*.bin`，之后每张卡只读文件，完全不碰场景。
+        /// 缓存只在缺失时生成一次，存到 BepInEx/config/SkinCache/*.bin，之后每张卡只读文件。
         /// </summary>
         private static IEnumerator EnsureSkinCache(ExportOptions o)
         {
@@ -444,10 +404,7 @@ namespace KKPEHeightLock
 
             float t0 = Time.realtimeSinceStartup;
 
-            // 先把 Studio 自己的启动等完再动手。冷启动时 Studio 组件十几秒就存在了，
-            // 但它自己的初始化（默认场景、UI、一堆插件）还要再跑二十多秒；这期间调
-            // LoadSceneCoroutine，加载会被它的启动流程覆盖掉，卡等于没读进来 ——
-            // 表现就是「画面是亮的但一直在变」，第一张永远做不成。
+            // 先等 Studio 自己的启动流程走完：这期间调 LoadSceneCoroutine 会被它覆盖掉
             IEnumerator warm = WaitStudioReady();
             while (warm.MoveNext()) yield return warm.Current;
 
@@ -455,8 +412,7 @@ namespace KKPEHeightLock
             IEnumerator skinPrepRun = EnsureSkinCache(o);
             while (skinPrepRun.MoveNext()) yield return skinPrepRun.Current;
 
-            // 注意这里用 while 而不是 for：被暂停打断的那张卡要**原地重录**，
-            // 所以下标不能自增（见下面 _pauseInterrupt 分支）。
+            // 用 while 而不是 for：被暂停打断的那张卡要原地重录，下标不能自增
             for (int i = 0; i < o.Scenes.Count; )
             {
                 if (CancelRequested) break;
@@ -501,9 +457,8 @@ namespace KKPEHeightLock
                     else yield return cur;
                 }
 
-                // 被暂停打断：这张卡只录了半截，管道已经关了接不回去。
-                // 下次重录换一个新目录（见 ExportOne 的 attempt），这里**不删**旧目录 ——
-                // VideoExport 收尾时还要用，删了它会报 DirectoryNotFound、混流也拿不到文件。
+                // 被暂停打断：这张卡只录了半截，继续后换新目录重录。旧目录不删，
+                // VideoExport 收尾还要用。
                 if (_pauseInterrupt)
                 {
                     _pauseInterrupt = false;
@@ -525,13 +480,11 @@ namespace KKPEHeightLock
                 }
                 Progress = (float)(i + 1) / o.Scenes.Count;
 
-                // 兜底：ExportOne 中途出错/提前 yield break 时 hold 可能还开着，
-                // 时间轴会一直冻着（用户回 Studio 手动播放也没反应）。
+                // 兜底：ExportOne 中途出错时 hold 可能还开着，时间轴会一直冻着
                 HoldTimeline = false;
                 i++;
 
-                // 录完一张就清一次资源（见 CleanupAfterCard 的注释：
-                // Studio 换场景不释放旧卡的贴图/网格/材质，不手动清就会累积到 OOM）。
+                // 每张卡录完清一次资源，否则贴图/网格累积到 OOM
                 IEnumerator cleanup = CleanupAfterCard();
                 while (cleanup.MoveNext()) yield return cleanup.Current;
             }
@@ -566,9 +519,7 @@ namespace KKPEHeightLock
                 MergedOutput = Segments[0];
             }
 
-            // 保留分段 = 把每段的 mp4 留着（方便单独用）。不保留就删掉，
-            // 顺手把 VideoExport 写原始文件用的 s001_xxx/ 空目录一起清掉 ——
-            // 以前这里只打了一行日志、从来没真删过，勾不勾都留着。
+            // 保留分段 = 每段的 mp4 留着方便单独用；不保留就连 VideoExport 的临时目录一起清掉
             if (Segments.Count > 1 && o.Merge && !o.KeepSegments)
             {
                 int removed = 0;
@@ -638,12 +589,8 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 一张卡录完后的清理。
-        ///
-        /// 这是批量导出 OOM 闪退的主因：Studio 换场景只会销毁场景里的对象，
-        /// **不会**释放旧卡的贴图/网格/材质实例 —— Unity 的 asset 只有
-        /// `Resources.UnloadUnusedAssets()` 才会真正回收。一张 hongcha 卡解出来
-        /// 就是几十 MB 贴图 + 上千个材质实例，连做十几张就吃满 32G。
+        /// 一张卡录完后的清理：Studio 换场景不会释放旧卡的贴图/网格/材质，
+        /// 必须 UnloadUnusedAssets + GC，否则连做十几张就 OOM。
         /// </summary>
         private static IEnumerator CleanupAfterCard()
         {
@@ -665,11 +612,7 @@ namespace KKPEHeightLock
             LogMemory("卡间清理后");
         }
 
-        /// <summary>
-        /// 取文件名做日志。不能用裸的 Path.GetFileName：cfg 里的路径可能带着被转义
-        /// 破坏过的字符，它会抛 Illegal characters in path —— 在协程里一抛就是
-        /// 「替换出错」，把正常流程带崩。
-        /// </summary>
+        /// <summary>取文件名做日志。路径可能带非法字符，裸 Path.GetFileName 会抛异常。</summary>
         internal static string NameOf(string p, bool withExt = true)
         {
             if (string.IsNullOrEmpty(p)) return "";

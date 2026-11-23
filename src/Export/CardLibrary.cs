@@ -27,12 +27,8 @@ namespace KKPEHeightLock
     }
 
     /// <summary>
-    /// 角色卡目录的扫描与懒加载（后端）。
-    ///
-    /// 以前选卡弹框只列「当前目录的直接子文件夹 + 直接卡片」，子文件夹要靠另一个
-    /// 「选择子文件夹」弹框去钻 —— 那个弹框实际用起来进不去，而且一次只能看一层。
-    /// 现在照场景卡列表的做法：整棵目录树一次扫出来，界面按行画「文件夹 / 卡片」，
-    /// 文件夹行自己带展开箭头，点一下就在原地展开。
+    /// 角色卡目录的扫描与懒加载（后端）：整棵目录树一次扫出来，
+    /// 界面按行画「文件夹 / 卡片」，文件夹行自带展开箭头。
     /// </summary>
     public static class CardLibrary
     {
@@ -61,12 +57,9 @@ namespace KKPEHeightLock
         public static int Version { get { return _version; } }
 
         /// <summary>
-        /// 角色卡根目录（**规范化后的绝对路径**）。
-        ///
-        /// 必须 GetFullPath：KKS 里 <c>UserData.Path</c> 长这样
-        /// <c>.../CharaStudio_Data/../UserData</c>（带 ..），而 Directory.GetFiles 返回的是
-        /// 规范化过的 <c>.../UserData/...</c>。两个串长度不一样，直接拿 root.Length 去
-        /// Substring 就会算错 —— 表现为「卡只扫进来一半，剩下的全报 startIndex 越界」。
+        /// 角色卡根目录（规范化后的绝对路径）。
+        /// 必须 GetFullPath：UserData.Path 带 `..`，而 Directory.GetFiles 返回的是规范化路径，
+        /// 两者长度不同，直接用 root.Length 去 Substring 会算错。
         /// </summary>
         public static string RootPath(bool female)
         {

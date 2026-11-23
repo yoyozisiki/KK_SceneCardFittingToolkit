@@ -29,7 +29,6 @@ namespace KKPEHeightLock
                     if (c != null && c.charInfo != null)
                         _fssChars.Add(c);
                 }
-                _fssMode = _fssChars.Count > 1;
                 KKPEHeightLockPlugin.Log.LogMessage($"ScenePlayer: FSS candidates {_fssChars.Count}");
             }
             catch (Exception e) { KKPEHeightLockPlugin.Log.LogWarning("ScenePlayer.RefreshFSS error: " + e); }
@@ -52,8 +51,6 @@ namespace KKPEHeightLock
             catch (Exception e) { KKPEHeightLockPlugin.Log.LogWarning("ScenePlayer.SwitchFSS error: " + e); }
         }
 
-        public static int FssCount { get { return _fssChars.Count; } }
         public static int FssIndex { get { return _fssIndex; } }
-        public static bool FssMode { get { return _fssMode; } }
     }
 }

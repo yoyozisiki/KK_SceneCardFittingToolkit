@@ -13,10 +13,8 @@ using UnityEngine;
 namespace KKPEHeightLock
 {
     /// <summary>
-    /// 场景工具:去无用球体 + 去码。
-    /// 逻辑参照 KK_SphereRemover v1.0.0 与 KK_StudioDecensor，但**不依赖
-    /// KK_MaterialEditor**（本机没装）：直接改 Renderer 上那份渲染用的材质实例，
-    /// 效果一样，少一个程序集依赖。
+    /// 场景工具：去无用球体 / 去遮挡物 / 去码 / 光照与过曝处理 / male 半透明。
+    /// 直接改 Renderer 上的材质实例，不依赖 KK_MaterialEditor。
     /// </summary>
     public static class SceneTools
     {
@@ -126,13 +124,9 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 去掉场景里的遮挡物：
-        ///   1. 「胶囊」遮挡道具（カプセル(通常) / 캡슐 (보통) / Capsule）—— KKS 原生的
-        ///      性器遮挡，部分场景卡会把它当独立道具摆在镜头前，默认的材质去码碰不到；
-        ///   2. Studio Text Plugin 生成的文字对象（"-Text Plugin:xxx"）—— 静态标题/字幕，
-        ///      会横在画面上挡镜头。
-        ///
-        /// 只隐藏不删除：树里还能点回来，场景不保存就不影响磁盘上的卡。
+        /// 去掉场景里的遮挡物（只隐藏不删除，树里还能点回来）：
+        ///   1. 「胶囊」遮挡道具（多语言显示名都认）；
+        ///   2. Studio Text Plugin 生成的文字对象（"-Text Plugin:xxx"）。
         /// </summary>
         public static void RemoveObstructions()
         {
@@ -239,15 +233,9 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 把**角色光照**（Character Lighting）的亮度压到 max 以内。
-        ///
-        /// 注意：这不是「全局光照封顶」。Koikatsu 的 KKUSS/KKUTS 材质几乎只吃
-        /// CameraLightCtrl 里那盏角色灯（LightCalc.light），场景地图灯对它影响很小；
-        /// 而过曝基本都来自这盏灯被设到 1 以上（场景卡常见 2~8）。
-        /// 所以只 clamp 它，不动场景灯光和环境光，避免破坏场景本身的明暗。
-        ///
-        /// LightCalc 是 CameraLightCtrl 的私有嵌套字段，只能反射拿；
-        /// 顺便同步 UI 的 slider / input，否则面板上还显示旧的大数值。
+        /// 把角色光照亮度压到 max 以内：只压 CameraLightCtrl 里那盏角色灯
+        /// （KKUSS/KKUTS 材质几乎只吃它），不动场景灯光和环境光。
+        /// LightCalc 是私有嵌套字段，走反射，并同步面板上的 slider / input。
         /// </summary>
         public static void ClampCharacterLighting(float max)
         {
@@ -326,14 +314,8 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// KKUSS 材质过曝抑制（**过曝的真正根因**）。
-        ///
-        /// `ShadowPower` 是阴影强度，**越小越亮**。KKUSS 默认 0.85，角色卡常被调到
-        /// 0.5~0.55，画面就会整体过曝、浅色衣服直接白掉。这里把 &lt; 0.85 的抬回 0.85。
-        ///
-        /// 注意：**不动 Addcolor**（用户明确要求保留角色配色，Addcolor 是作者调过的颜色）。
-        ///
-        /// 属性名同时试带下划线和不带下划线两种写法。
+        /// KKUSS 材质过曝抑制：ShadowPower 越小越亮（默认 0.85，卡里常被调到 0.5），
+        /// 这里把低于 minShadowPower 的抬回去。不动 Addcolor（作者调过的配色）。
         /// </summary>
         public static void ClampKkussOverexposure(float minShadowPower = 0.85f)
         {
@@ -393,7 +375,6 @@ namespace KKPEHeightLock
         }
 
         private static readonly string[] ShadowPowerNames = { "ShadowPower", "_ShadowPower", "shadowPower" };
-        private static readonly string[] AddColorNames = { "Addcolor", "_Addcolor", "AddColor", "_AddColor" };
 
         private static bool GetFloatAny(Material m, string[] names, out float value)
         {
@@ -429,39 +410,6 @@ namespace KKPEHeightLock
             return ok;
         }
 
-        private static bool GetColorAny(Material m, string[] names, out Color value)
-        {
-            value = Color.white;
-            if (m == null || names == null) return false;
-            for (int i = 0; i < names.Length; i++)
-            {
-                try
-                {
-                    if (!m.HasProperty(names[i])) continue;
-                    value = m.GetColor(names[i]);
-                    return true;
-                }
-                catch (Exception) { }
-            }
-            return false;
-        }
-
-        private static bool SetColorAny(Material m, string[] names, Color value)
-        {
-            if (m == null || names == null) return false;
-            bool ok = false;
-            for (int i = 0; i < names.Length; i++)
-            {
-                try
-                {
-                    if (!m.HasProperty(names[i])) continue;
-                    m.SetColor(names[i], value);
-                    ok = true;
-                }
-                catch (Exception) { }
-            }
-            return ok;
-        }
         /// <summary>
         /// male 半透明：材质换 KKUSSalpha 并改 alpha。
         /// 换 shader 前必须先迁移贴图/颜色（_MainTex→MainTex、_Color→Color），否则贴图丢失变白。
@@ -496,14 +444,9 @@ namespace KKPEHeightLock
                     if (oc == null || oc.sex != 0 || oc.charInfo == null) continue;   // 0 = male
                     chars++;
 
-                    // ---- 身体 / 衣服 / 饰品：全部走材质，**保留原色**只降 alpha。
-                    //
-                    // 不用 SetVisibleSimple：那是 Studio 的「単色 / 简单显示」，
-                    // 会把正常身体换成 S_SimpleBody 纯色替身 —— 看起来就是"只剩轮廓的白色"，
-                    // 不是我们要的"带颜色的半透明"。
-                    //
-                    // 性器部件不能透明：按 renderer 名 + **材质名**双重匹配
-                    // （Koikatsu 的男性性器通常是 body 的一个独立材质槽，renderer 名是 body）。
+                    // ---- 身体 / 衣服 / 饰品：全部走材质，保留原色只降 alpha。
+                    // 不用 SetVisibleSimple —— 那会把身体换成纯色替身，不是半透明。
+                    // 性器部件不透明化：按 renderer 名 + 材质名 + shader 多重匹配。
                     try
                     {
                         var renderers = oc.charInfo.GetComponentsInChildren<Renderer>(true);
@@ -520,8 +463,7 @@ namespace KKPEHeightLock
                                 var mat = rs[m];
                                 if (mat == null) continue;
 
-                                // 只把「身体/性器」相关名字记进日志：头发/脸太多会把日志刷爆，
-                                // 上次 900 字截断在眼睛，根本没看到 body。
+                                // 只把「身体/性器」相关名字记进日志，头发/脸太多会刷爆
                                 string rn = CleanInstName(r.name);
                                 string mn = CleanInstName(mat.name);
                                 string shn = mat.shader != null ? CleanInstName(mat.shader.name) : "";
@@ -535,12 +477,9 @@ namespace KKPEHeightLock
                                     }
                                 }
 
-                                // 性器四重判定：
-                                //   ① renderer 的**父节点链**（Studio 树里「股间」那一组，
-                                //      真正的标识在 n_dankon / o_mnpb 这些父节点上）
-                                //   ② renderer 名  ③ 材质名  ④ shader 名
+                                // 性器四重判定：父节点链 / renderer 名 / 材质名 / shader 名
                                 if (IsUnderGenitalNode(r.transform)
-                                    || IsGenitalRenderer(r.name)
+                                    || IsGenitalMaterial(r.name)
                                     || IsGenitalMaterial(mat.name)
                                     || IsGenitalShader(mat.shader))
                                 {
@@ -576,21 +515,10 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 是不是男性性器相关的 renderer / 材质 —— 这些不能透明化。
-        ///
-        /// 命名是从 `abdata/chara/oo_base.unity3d` 里挖出来的真实节点：
-        ///   cf_01/cf_o_root/n_body/n_dankon/o_dankon/o_gomu   ← 男根（dankon）
-        ///   cf_01/cf_o_root/n_body/o_body_a/n_mnpb/o_mnpb     ← mnpb
-        ///   cf_01/cf_o_root/n_cm_body/n_dankon 1/o_dan_f      ← 男根另一种布局
-        /// 而且男根有专门的 shader：`Shader Forge/mnpb`。
-        /// 所以判据是 dankon / mnpb / mnpa / dan_f / goma，而不是 penis / kokan
-        /// （kokan 是股间判定体，不是性器本体）。
+        /// 是不是男性性器相关的名字（这些不透明化）。
+        /// 命名取自 abdata 里的真实节点：n_dankon / o_mnpb / o_dan_f / o_gomu，
+        /// 不是 penis / kokan（kokan 是股间判定体）。
         /// </summary>
-        private static bool IsGenitalRenderer(string name)
-        {
-            return IsGenitalMaterial(name);
-        }
-
         private static readonly string[] GenitalKeys =
         {
             "dankon", "mnpb", "mnpa", "dan_f", "goma",
@@ -617,13 +545,9 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 从 renderer 往**上**爬父节点，看它是不是挂在「股间」分组下。
-        ///
-        /// 这才是关键：男性性器的 renderer 名字通常就是 `cf_O_body`，
-        /// 光看 renderer 自己的名字永远找不到；真正的标识在父节点链上：
-        ///     cf_01/cf_o_root/n_body/n_dankon/o_dankon/o_gomu
-        ///     cf_01/cf_o_root/n_body/o_body_a/n_mnpb/o_mnpb
-        /// 也就是 Studio 工作区树里「股间」那一组。
+        /// 从 renderer 往上爬父节点，判断是不是挂在「股间」分组下。
+        /// 性器的 renderer 名通常就是 cf_O_body，真正的标识在父节点链上
+        /// （n_dankon / o_mnpb / o_gomu…）。
         /// </summary>
         private static bool IsUnderGenitalNode(Transform t)
         {
@@ -685,14 +609,8 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 找 KKUSSalpha 这个 shader。
-        ///
-        /// 三个来源依次试：
-        ///   1. 已加载的 Shader（MaterialEditor 把 KKUSS 包加载进来后就在内存里）；
-        ///   2. `Shader.Find("KKUSSalpha")`；
-        ///   3. MaterialEditor 的 `LoadedShaders` 字典（zipmod manifest 注册的 shader，
-        ///      key 就是 "KKUSSalpha"）—— KKUSSalpha 平时没有材质引用，
-        ///      前两步都可能拿不到，这一步最稳。
+        /// 找 KKUSSalpha 这个 shader：依次试已加载的 Shader、Shader.Find、
+        /// MaterialEditor 的 LoadedShaders（KKUSSalpha 平时没有材质引用，后者最稳）。
         /// </summary>
         private static Shader FindKkussAlphaShader()
         {
@@ -806,10 +724,8 @@ namespace KKPEHeightLock
             }
             catch (Exception) { }
 
-            // 用户指定：改 KKUSSalpha 的 alpha 属性。
-            // 但属性名不一定就是 manifest 里写的 "alpha"（可能是 _alpha / _Alpha），
-            // 所以直接遍历 shader 的所有属性，凡是名字含 alpha/opacity/transparen 的
-            // Float/Range 都设一遍 —— 不靠猜。
+            // 用户指定：改 KKUSSalpha 的 alpha。属性名可能是 alpha / _alpha / _Alpha，
+            // 不靠猜 —— 遍历 shader 属性，凡是名字含 alpha/opacity/transparen 的 Float/Range 都设一遍。
             int propCount = 0;
             try { propCount = mat.shader.GetPropertyCount(); } catch (Exception) { propCount = 0; }
             for (int pi = 0; pi < propCount; pi++)
@@ -850,7 +766,7 @@ namespace KKPEHeightLock
                 }
             }
 
-            // 诊断：仍然没改到，就把这个 shader 的属性名列出来（下次日志能直接看到真名）
+            // 诊断：仍然没改到，就把属性名列出来，下次看日志能直接看到真名
             if (!touched && logShaders.Length < 1200)
             {
                 string props = "";

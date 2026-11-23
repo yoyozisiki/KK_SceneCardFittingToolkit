@@ -23,12 +23,8 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 构建「运行时对象 → Timeline objectIndex」的映射（仅诊断/兜底用）。
-        ///
-        /// Timeline 卡里的 objectIndex 是
-        /// <c>new SortedDictionary&lt;int, ObjectCtrlInfo&gt;(dicObjectCtrl).ToList()</c>
-        /// 的下标，不是 dicObjectCtrl 的 key。这个映射只用来在日志里显示对照关系，
-        /// 以及运行时数据读不到时做兜底。
+        /// 构建「运行时对象 → Timeline objectIndex」映射（仅诊断/兜底）。
+        /// 下标是 new SortedDictionary(dicObjectCtrl).ToList() 的位置，不是 dicObjectCtrl 的 key。
         /// </summary>
         private static Dictionary<Studio.ObjectCtrlInfo, int> BuildTimelineIndexMap(Studio.Studio studio)
         {
@@ -52,16 +48,10 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 从「当前已加载的 Timeline 插件」读出**在 timeline 里出现过的**真实对象（按 OCI 引用）。
-        ///
-        /// 为什么看「所有通道」而不是只看 objectEnabled：
-        /// 换装卡把角色移进移出画面靠的是 guideObjectPos / guideObjectRot（位置动画），
-        /// 甚至 bonePos / 表情曲线，不一定有 objectEnabled。hongcha #06 就是典型：
-        /// 9 个 female 里只有 1 个有 objectEnabled 通道，其余全靠位置和骨骼动画。
-        /// 只要某个 female 在 timeline 里有任何插值项，它就是换装链路的一环。
-        ///
-        /// 返回 null 表示读不到（Timeline 没装 / 没加载时间轴），调用方再回退到
-        /// 文件解析 + 排序下标的方案。
+        /// 从 Timeline 插件读出在时间轴里出现过的对象（按 OCI 引用）。
+        /// 看的是「所有通道」而不是只看 objectEnabled：换装卡把角色移进移出画面靠的是
+        /// 位置/骨骼/表情动画，不一定有 objectEnabled。
+        /// 返回 null 表示读不到（Timeline 没装 / 没加载）。
         /// </summary>
         private static HashSet<Studio.ObjectCtrlInfo> GetTimelineOcis()
         {
@@ -82,8 +72,8 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 建一个「角色 → 是否在 timeline 里出现过」的判定器。优先用 Timeline 运行时数据
-        /// （按对象引用，最准）；读不到再回退到场景卡文件解析出的下标集合 + 排序映射。
+        /// 建一个「角色是否在 timeline 里出现过」的判定器：优先用运行时数据（按对象引用，
+        /// 最准），读不到再回退到场景卡文件解析出的下标集合。
         /// </summary>
         private static Func<Studio.ObjectCtrlInfo, bool> BuildTimelinePredicate(HashSet<int> revealed)
         {
@@ -108,14 +98,9 @@ namespace KKPEHeightLock
 
         // ======================================================== 替换 female
         /// <summary>
-        /// 角色是不是「显示中」（工作室树里的眼睛图标开着）。
-        /// 这只是「当前帧的可见状态」，不代表角色全程不出片：Timeline 会在某些帧把
-        /// 隐藏角色取消隐藏（与上一个显示角色是前后关系），那类角色由 ReplaceFemale 按前卡规则处理。
-        ///
-        /// 判据（眼睛图标关掉时两条会同时变 false）：
-        ///   · charInfo.visibleAll —— OCIChar.OnVisible(false) 里被置 false，最直接；
-        ///   · treeNodeObject.visible —— 树节点眼睛图标本身的状态，兜底。
-        /// 两条都拿不到时按「显示」处理，宁可多换也别误伤正常角色。
+        /// 角色是不是「显示中」（树里的眼睛图标开着）。
+        /// 判据：charInfo.visibleAll 与 treeNodeObject.visible，都拿不到时按显示处理。
+        /// 隐藏角色也可能在后续帧被 Timeline 取消隐藏，由 ReplaceFemale 按前卡规则处理。
         /// </summary>
         private static bool IsFemaleVisible(Studio.OCIChar oc)
         {
@@ -136,9 +121,8 @@ namespace KKPEHeightLock
         }
         private static IEnumerator ReplaceFemale(ExportOptions o, HashSet<int> revealed)
         {
-            // **必须在换人之前**：KKPE 碰撞体的「Enable New Dynamic Bones」开着时，
-            // 一旦角色重建，新出现的动骨会被自动加进碰撞体的影响列表 → 饰品头发被吸走。
-            // 社区对 hongcha 场景的标准做法就是在 KKPE 高级模式里把这个开关取消掉。
+            // 必须在换人之前：KKPE 开着「Enable New Dynamic Bones」时，角色重建后的新动骨
+            // 会被自动加进碰撞体影响列表 → 饰品头发被吸走。
             try { ColliderBindingFix.DisableAutoAttachNewBones(); }
             catch (Exception e) { Log("[提示] 关闭自动吸附新动骨失败：" + e.Message); }
 
@@ -150,12 +134,9 @@ namespace KKPEHeightLock
             catch (Exception) { }
             if (studio == null) { Log("找不到 Studio 实例，跳过替换"); yield break; }
 
-            // 按对象编号排序，保证「第一个 female」和「前一个显示角色」的顺序稳定 ——
-            // 字典遍历顺序不保证，直接遍历会出现「这次换这张、下次换那张」。
-            // 角色分三种，分开处理：
-            //   ① 显示中                → 按顺序拿主卡 / 次卡（消耗一个新卡序号）；
-            //   ② 隐藏但会被取消隐藏（前后关系）→ 用「上一个显示角色」的卡，不消耗新序号；
-            //   ③ 真隐藏                → 跳过。
+            // 按对象编号排序，保证「第一个 female」「上一个显示角色」的顺序稳定。
+            // 显示中的角色按顺序拿主卡 / 次卡（消耗一个序号）；隐藏角色是同一个人的
+            // 另一套造型，一律用主卡，不消耗序号。
             var slots = new List<FemaleSlot>();
             // 先标记：哪些 female 在 timeline 里出现过（位置/骨骼/表情/显隐任意通道）。
             // 换装卡里隐藏的 female 几乎都是靠位置动画入场的，不能只看 objectEnabled。
@@ -188,8 +169,7 @@ namespace KKPEHeightLock
                 if (slots[s].Visible) shownCount++;
                 else { hiddenCount++; if (slots[s].InTimeline) hiddenInTl++; }
             }
-            // 只剩隐藏角色也照样换：换装卡的第一帧可能就是隐藏态，主卡必须换上去，
-            // 否则一播放就露出场景原角色。
+            // 只剩隐藏角色也照样换：换装卡第一帧可能就是隐藏态，不换会露出场景原角色
             if (slots.Count == 0)
             {
                 Log("[提示] 场景里没有 female，跳过替换");
@@ -237,12 +217,10 @@ namespace KKPEHeightLock
 
             foreach (var slot in slots)
             {
-                // 停止：立刻中断，不再换后面的角色（否则点了停止还会继续替换）。
+                // 停止：立刻中断，不再换后面的角色
                 if (CancelRequested) { Log("[停止] 中断替换，剩余角色不再处理"); yield break; }
-                // 暂停：停在**角色与角色之间**等 ESC。不能停在一个角色换到一半的位置
-                // （骨架/网格处于半重建状态，继续时容易出错）。
-                // 只在「进入暂停」时写一次阶段和日志：SetPhase 每次都会 LogMessage，
-                // 放在 while 里会每帧刷一条（实测一次暂停刷了 51 条，把日志冲没了）。
+                // 暂停：只在角色与角色之间停，避免骨架处于半重建状态。
+                // SetPhase 会写日志，只在进入暂停时写一次，否则每帧刷屏。
                 if (Paused && !CancelRequested) SetPhase("已暂停：按 ESC 继续");
                 while (Paused && !CancelRequested) yield return null;
                 if (CancelRequested) { Log("[停止] 中断替换，剩余角色不再处理"); yield break; }
@@ -256,10 +234,8 @@ namespace KKPEHeightLock
                 }
                 else
                 {
-                    // 隐藏角色：换装卡里它们就是同一个人的其他造型，在 timeline 之后会被
-                    // 移进画面/取消隐藏。**一律用主角色卡**（不消耗次卡序号），
-                    // 这样换装前后是同一个人；主卡没选时退回上一个显示角色的卡，
-                    // 再不行才从次卡池里取一张兜底。
+                    // 隐藏角色：换装卡里是同一个人的其他造型，一律用主卡；
+                    // 主卡没选时退回上一个显示角色的卡，再不行才从次卡池里取。
                     if (!string.IsNullOrEmpty(main))
                     {
                         card = main;
@@ -286,15 +262,12 @@ namespace KKPEHeightLock
                     var oci = slot.Oci;
                     var sceneBody = BodySnap.Capture(oci);
                     oci.ChangeChara(card);
-                    // 换人后 KKS 有时不会把卡里的 addMove（每件饰品的位置/旋转/缩放）应用上去：
-                    // #278 实测卡里 01 是 pos(0,-4.2,2)/scale(1.28)，换完人节点还是 (0,0,0)/1，
-                    // 于是所有饰品贴在父节点原点 → 头发直接糊在脸上。
-                    // UpdateAccessoryMoveAllFromInfo() 也救不回来，这里按卡自己写一遍。
+                    // 换人后 KKS 有时不会应用卡里的 addMove（每件饰品的位置/旋转/缩放），
+                    // 饰品会全贴在父节点原点 → 头发糊在脸上，这里按卡重写一遍。
                     try { oci.charInfo.UpdateAccessoryMoveAllFromInfo(); }
                     catch (Exception e1) { Log("重算饰品变换失败：" + e1.Message); }
-                    // 换人只保证服装换掉，饰品槽的显隐会被原角色/AccStateSync 继承下来，
-                    // 而不少卡把头发做成饰品（"Accessories: 01 lulum hair"）→ 成片光头。
-                    // 所以换完先全部显示，卡片自己标了隐藏的再按卡还愿。
+                    // 饰品槽显隐会被原角色/AccStateSync 继承，头发类饰品会被一起藏掉。
+                    // 先全部显示，再按卡里标的隐藏还愿。
                     ShowAllAccessories(oci);
                     var cardBody = BodySnap.Capture(oci);
                     BodySnap.Compose(oci, sceneBody, cardBody, o);
@@ -314,7 +287,7 @@ namespace KKPEHeightLock
             }
 
             // ChangeChara 内部的 Reload 是分帧收尾的：立刻写回的身材会被新卡数据盖掉，
-            // 所以换完再补写 3 轮（每轮隔 2 帧）。3 轮 × 2 帧是实测的稳定下界。
+            // 所以换完再补写 3 轮（每轮隔 2 帧）。
             for (int round = 0; round < 3; round++)
             {
                 for (int i = 0; i < swapped.Count; i++)
@@ -331,10 +304,7 @@ namespace KKPEHeightLock
             Log($"替换完成：{done} 个 female（显示用主卡 {byMain} / 显示用次卡 {bySub} / 隐藏用主卡 {byHidden}）");
         }
 
-        /// <summary>
-        /// 给第 n 个 female（0 起）挑一张卡。tag 用来打日志：主 / 次1 / 次随机。
-        /// 分配规则见 <see cref="ReplaceFemale"/> 的注释。
-        /// </summary>
+        /// <summary>给第 n 个显示中的 female（0 起）挑一张卡。tag 用来打日志：主 / 次1 / 次随机。</summary>
         private static string PickCardForFemale(ExportOptions o, int n, string main,
                                                List<string> pool, System.Random rng, out string tag)
         {
@@ -357,15 +327,8 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 换人后把所有饰品槽恢复成「显示」。
-        ///
-        /// 为什么需要：不少角色卡直接拿饰品当头发用（卡片里写着 "Accessories: 01 lulum hair"），
-        /// 而 ChangeChara 之后饰品槽的显隐会被原角色 / AccStateSync 这类插件继承下来 ——
-        /// 原场景角色身上关掉的槽，新角色的同槽位也跟着关，发型饰品被一起藏掉，
-        /// 成片里就是光头、只剩下衣服。
-        ///
-        /// 所以换完人默认全部打开；角色卡自己把这些槽标成「隐藏」的，再按卡还原回去，
-        /// 保证「卡里想藏的还能藏，只是不再被场景/旧角色带着一起藏」。
+        /// 换人后把所有饰品槽恢复成「显示」，再按衣服状态和卡里的隐藏标记收一遍。
+        /// 不少角色卡把头发做成饰品，不打开的话换人后就是光头。
         /// </summary>
         private static void ShowAllAccessories(Studio.OCIChar oci)
         {
@@ -381,9 +344,7 @@ namespace KKPEHeightLock
                 // 1) 先全部显示（解决「饰品当头发」的卡换人后变光头）
                 ci.SetAccessoryStateAll(true);
 
-                // 2) 再按当前衣服状态收一遍：上衣半脱时挂在衣服上的饰品（蝴蝶结之类）
-                //    要跟着藏起来，不能全亮着悬空。这一步交给 AccStateSync 自己算，
-                //    它存着每个饰品跟哪件衣服、哪个状态绑定的规则。
+                // 2) 再按当前衣服状态收一遍：上衣半脱时挂在衣服上的饰品要跟着藏
                 int synced = ApplyClothingStateToAccessories(ci);
 
                 // 3) 卡片自己标了「隐藏」的槽，按卡还原
@@ -407,15 +368,9 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 让 AccStateSync 按「当前衣服状态」把所有饰品重算一遍显隐。
-        ///
-        /// 为什么需要：把饰品全部打开是为了救「饰品当头发」的卡（否则换人后光头），
-        /// 但一刀切全开会把跟衣服联动的饰品也点亮 —— 上衣半脱时蝴蝶结还悬在半空。
-        /// AccStateSync 里存着「哪个饰品跟哪件衣服的哪个状态绑定」的规则，
-        /// 调用它的 SyncAllAccToggle 就等价于用户手动改衣服状态时它自动重算的那一下。
-        ///
-        /// 全部走反射：AccStateSync 是可选依赖，没装就只保留「全部显示」，
-        /// 不影响导出。返回 1 表示成功重算。
+        /// 按「当前衣服状态」重算各饰品槽的显隐。
+        /// AccStateSync 是可选依赖，全部走反射；没装就只保留「全部显示」。
+        /// 返回生效的槽数。
         /// </summary>
         private static int ApplyClothingStateToAccessories(ChaControl ci)
         {
@@ -481,16 +436,10 @@ namespace KKPEHeightLock
                     Log("[提示] AccStateSync 触发系统原本是关的，已临时打开");
                 }
 
-                // ---- 4) 直接按卡里的规则算，不再指望插件自己动
-                // 前面试过 SyncAllAccToggle / SetGroupState / 制造衣服状态变化，
-                // 都不动饰品（大概率它的钩子只处理面板交互那条路径）。这里改成
-                // 读它的 TriggerPropertyList，自己按「当前每个衣服部件的状态」算每个
-                // 饰品槽该不该显示：
-                //   规则 = { Coordinate, Slot, RefKind, RefState, Visible, Priority }
-                //     · RefKind 是衣服部件编号（0 上衣 / 1 下衣 / 2 胸罩 …）
-                //     · RefState 是该部件的一个状态（0=on, 1=1/2, 2=off）
-                //     · 当前 RefKind 的状态等于 RefState 时，这条规则生效；
-                //       同一个槽有多条生效时取 Priority 最大的那条。
+                // ---- 4) 按 AccStateSync 的 TriggerPropertyList 自己算每个饰品槽的显隐。
+                // 规则 = { Coordinate, Slot, RefKind, RefState, Visible, Priority }：
+                // RefKind 是衣服部件编号，RefState 是该部件状态；当前部件状态等于 RefState
+                // 时这条生效，同一个槽多条生效时取 Priority 最大的。
                 var states = ci.fileStatus != null ? ci.fileStatus.clothesState : null;
                 if (states == null) return 0;
 
@@ -607,9 +556,8 @@ namespace KKPEHeightLock
         }
 
         /// <summary>部件名的中文显示（认不出来的就用原名）。
-        /// 注意 KKS 的枚举名和 KK 不一样，实测是：
-        /// top / bot / bra / shorts / gloves / panst / socks / shoes_inner / shoes_outer，
-        /// 别照 KK 的 `bottom` / `pantyhose` / `shoes` 猜。</summary>
+        /// KKS 的枚举名是 top / bot / bra / shorts / gloves / panst / socks /
+        /// shoes_inner / shoes_outer，别照 KK 的写法猜。</summary>
         public static string ClothesKindLabel(int i)
         {
             var names = ClothesKindNames;
@@ -698,13 +646,10 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 收集要应用服装 / 体型的 female。
-        ///
-        /// **所有** female 都收，包括隐藏的：换装卡里隐藏角色靠位置动画入场，
-        /// 是同一个人换的另一套造型，必须跟着穿同一套衣服、用同一套体型，
-        /// 否则换装前后衣服/身材对不上。
+        /// 收集要应用服装 / 体型的 female（含隐藏角色：换装卡里它们会入场，
+        /// 必须同一套衣服、同一套体型）。
         /// </summary>
-        private static List<Studio.OCIChar> CollectFemales(HashSet<int> revealed)
+        private static List<Studio.OCIChar> CollectFemales()
         {
             var list = new List<Studio.OCIChar>();
             try
@@ -715,7 +660,6 @@ namespace KKPEHeightLock
                 {
                     var oc = kv.Value as Studio.OCIChar;
                     if (oc == null || oc.sex != 1 || oc.charInfo == null) continue;
-                    // 隐藏的 female 也收：换装卡里它们会入场，必须同一套衣服/体型。
                     list.Add(oc);
                 }
             }
@@ -725,15 +669,10 @@ namespace KKPEHeightLock
 
         /// <summary>
         /// 应用服装预设 + 部件脱衣状态。
-        ///
-        /// 顺序有讲究：SetCoordinateInfo 会把 shapeValueBody 冲回该套装的默认值，
-        /// 所以先存一份身材快照，设完服装再写回去。写回用 Compose(snap, snap) ——
-        /// 场景/角色卡都传同一份，不管三个来源开关怎么选，结果都等于快照本身。
-        ///
-        /// 另外部件状态要**在一个循环里批量设**：SetClothesState 每调一次都会让
-        /// 角色重建一遍网格，9 个部件分 9 次设就是 9 轮重建，实测能吃掉好几秒。
+        /// 顺序有讲究：SetCoordinateInfo 会把 shapeValueBody 冲回套装默认值，所以先存身材快照、
+        /// 设完服装再按快照写回。部件状态在一个循环里批量设，避免每设一次重建一遍网格。
         /// </summary>
-        private static IEnumerator ApplyClothes(ExportOptions o, HashSet<int> revealed)
+        private static IEnumerator ApplyClothes(ExportOptions o)
         {
             bool wantOutfit = o.Outfit >= 0 || o.Outfit == -2;   // -2 = 随机
             bool wantParts = false;
@@ -742,7 +681,7 @@ namespace KKPEHeightLock
                     if (o.ClothesParts[i] >= 0) { wantParts = true; break; }
             if (!wantOutfit && !wantParts) yield break;
 
-            var chars = CollectFemales(revealed);
+            var chars = CollectFemales();
             if (chars.Count == 0)
             {
                 Log("[提示] 场景里没有 female，跳过服装设置");
@@ -752,12 +691,8 @@ namespace KKPEHeightLock
             var snaps = new List<BodySnap>();
             for (int i = 0; i < chars.Count; i++) snaps.Add(BodySnap.Capture(chars[i]));
 
-            // **等 ChangeChara 的 Reload 落地**。
-            // ReplaceFemale 里每个角色都调过 ChangeChara，它的 Reload 是分帧执行的；
-            // 这期间 fileStatus / chaFile.coordinate 还没就绪，这时调 SetCoordinateInfo，
-            // 内部 ChangeCoordinateType() 会返回 false —— 于是**静默不换装**：
-            // 没异常、没日志，看起来就是"随机服装失效"。
-            // 实测等 12 帧（约 0.2s）足够让 10 个以内的角色全部就绪。
+            // 等 ChangeChara 的 Reload 落地：这期间调 SetCoordinateInfo 会静默失败
+            // （不抛异常、也不换装），实测 12 帧约 0.2s 足够。
             for (int f = 0; f < 12; f++) yield return null;
 
             int nCoord = 0, nParts = 0, nCoordFail = 0;
@@ -766,8 +701,6 @@ namespace KKPEHeightLock
             {
                 // 停止 / 暂停也在角色之间生效（和替换 female 同样的语义）
                 if (CancelRequested) { Log("[停止] 中断换装，剩余角色不再处理"); yield break; }
-                // 只在「进入暂停」时写一次阶段和日志：SetPhase 每次都会 LogMessage，
-                // 放在 while 里会每帧刷一条（实测一次暂停刷了 51 条，把日志冲没了）。
                 if (Paused && !CancelRequested) SetPhase("已暂停：按 ESC 继续");
                 while (Paused && !CancelRequested) yield return null;
                 if (CancelRequested) { Log("[停止] 中断换装，剩余角色不再处理"); yield break; }
@@ -793,14 +726,13 @@ namespace KKPEHeightLock
                     }
                     catch (Exception e) { Log("挑选服装槽失败：" + e.Message); }
 
-                    // 切槽。注意 yield 不能放在 try/catch 里（C# 限制），所以拆开写。
+                    // 切槽。yield 不能放在 try/catch 里（C# 限制），所以拆开写
                     bool switched = true;
                     try { oc.SetCoordinateInfo((ChaFileDefine.CoordinateType)slot, true); }
                     catch (Exception e2) { Log("切换套装失败：" + e2.Message); switched = false; }
                     yield return null;
 
-                    // 验证真的切过去了。ChangeCoordinateType 失败时**不抛异常**，
-                    // 只能看 fileStatus.coordinateType 有没有变成目标槽位。
+                    // ChangeCoordinateType 失败时不抛异常，只能看 coordinateType 有没有变
                     if (switched) switched = CoordinateIs(oc, slot);
                     if (!switched)
                     {
@@ -849,9 +781,8 @@ namespace KKPEHeightLock
             if (nCoordFail > 0)
                 Log($"[提示] {nCoordFail} 个角色的服装槽切换失败（已重试一次，仍没生效）");
 
-            // 换装会分帧重建网格，等收尾后按「换装前快照」还原体型 + 乳量。
-            // 用 Compose（不用 RestoreBustPhysics）—— 后者不写 shapeValueBody，乳量大小回不去。
-            // 写两遍，防止 SetCoordinateInfo 内部的刷新覆盖。
+            // 换装会分帧重建网格，等收尾后按「换装前快照」还原体型 + 乳量
+            // （写两遍，防止 SetCoordinateInfo 内部的刷新覆盖）。
             for (int f = 0; f < 6; f++) yield return null;
             for (int i = 0; i < chars.Count; i++)
                 if (snaps[i] != null) BodySnap.Compose(chars[i], snaps[i], snaps[i], o);
@@ -878,11 +809,8 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 角色卡里「真的有衣服」的服装槽位。随机服装只在这些槽位里挑。
-        ///
-        /// 为什么不能直接 0~6 随机：卡片里的槽位可能是空的（用户只做了私服一套），
-        /// 切到空槽等于把角色扒光 —— 成片是裸的，比不换还糟。
-        /// 判据是「这套衣服里任意一个部件 id > 0」（id = 0 就是没穿这件）。
+        /// 角色卡里「真的有衣服」的服装槽位（任意部件 id &gt; 0）。随机服装只在这些槽位里挑，
+        /// 挑到空槽等于把角色扒光。
         /// </summary>
         public static List<int> AvailableOutfits(ChaControl ci)
         {
@@ -996,18 +924,9 @@ namespace KKPEHeightLock
         }
 
         // ============================================================ ReShade
-        // 本插件**只读不写** ReShade 预设。理由见 CheckReshadePreset 的注释。
+        // 本插件只读不写 ReShade 预设：泛光/暗角强度归用户在 ReShade 面板里调。
 
-        /// <summary>
-        /// ReShade 到底会读哪个预设文件。`ReShade.ini` 里的 `PresetPath` 才是
-        /// 真正生效的那一个。
-        ///
-        /// 踩过的坑：以前硬写 `&lt;根目录&gt;/KK_BloomVignette.ini`，但 ReShade.ini 的
-        /// `PresetPath` 指着 `ReShadePreset.ini`（那个文件根本不存在），于是
-        /// 我们写进去的泛光/暗角一条都没生效 —— 成片里既没暗角也没泛光，
-        /// 打开 ReShade 面板看，technique 是**没勾上**的。所以必须先问
-        /// ReShade.ini 要路径。
-        /// </summary>
+        /// <summary>ReShade 真正会读的预设文件：以 ReShade.ini 里的 PresetPath 为准，取不到再退回默认名。</summary>
         private static string ResolveReshadePresetPath()
         {
             string root = BepInEx.Paths.GameRootPath;
@@ -1034,15 +953,8 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 淡入淡出：一律在屏上盖黑遮罩，交给 ReShade 是**做不到**的。
-        ///
-        /// 试过让 shader 里加个 `Fade` uniform、导出时逐帧改写预设文件：
-        /// 画质一点没变（ReShade.log 里也没有重新编译），逐帧改文件这条路是死的，
-        /// 只能退回屏上遮罩。
-        /// 注意：预设**不是**「只在启动时读一次」—— 改窗口尺寸会把 ReShade 的
-        /// 运行环境整个重建、顺手重读预设（ReShade.log 里那串
-        /// "Destroyed / Recreated runtime environment"）。所以别指望「写了不生效」，
-        /// 写进去的值很可能下一刻就上屏 —— 这也是本插件不许碰预设文件的原因。
+        /// 淡入淡出：一律在屏上盖黑遮罩。ReShade 那边加不了 Fade 参数
+        /// （逐帧改预设不会触发重新编译），所以只能走屏上遮罩。
         /// </summary>
         private static void ApplyFade(float a)
         {
@@ -1054,16 +966,8 @@ namespace KKPEHeightLock
         private const string FxTech = "KK_BloomVignette@" + FxEffect;
 
         /// <summary>
-        /// 导出前**只读**看一眼 ReShade 预设：technique 开没开、当前四个参数是多少，打进日志。
-        ///
-        /// 这里以前是 <c>SyncReshadePreset()</c>，会把界面档位换算成参数**写回预设文件**
-        /// （`[KK_BloomVignette.fx]` 整段删掉重建）。后果很直接：
-        /// 用户在 ReShade 面板（Home 键）里手调好的泛光/暗角，一点「开始导出」就被
-        /// 换成本插件配置里的默认档位（`Vignette=Strong / Bloom=Medium` →
-        /// 阈值 0.62 / 强度 0.35 / 半径 4 / 暗角 0.87），
-        /// 而且导出时 VideoExport 会改窗口尺寸，ReShade 借机重建运行环境、
-        /// 重新读一遍预设 —— 于是手调的值当场失效，录出来的片子也是默认档位。
-        /// 所以现在禁止本插件写任何 ReShade 文件：参数归用户，插件只读不写。
+        /// 导出前只读看一眼 ReShade 预设：启用了哪些效果、本插件那几个参数是多少，打进日志。
+        /// 绝不写预设文件 —— 写了会把手调的值冲掉（导出改窗口尺寸时 ReShade 会重读预设）。
         /// </summary>
         public static void CheckReshadePreset()
         {
@@ -1104,8 +1008,7 @@ namespace KKPEHeightLock
                     }
                 }
 
-                // 现在用户多半用自己的预设（reshade_ini 里那一堆），所以这里只报「开了哪些效果」，
-                // 不再因为「本插件的 KK_BloomVignette 没勾」就报警 —— 那不是错。
+                // 用户多半用自己的预设，这里只报「开了哪些效果」，不因为没勾本插件那个效果就报警
                 var names = new List<string>();
                 if (!string.IsNullOrEmpty(techniques))
                 {

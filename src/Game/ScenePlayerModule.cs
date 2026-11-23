@@ -11,12 +11,8 @@ using UnityEngine;
 namespace KKPEHeightLock
 {
     /// <summary>
-    /// 场景播放器(复刻 sceneplayer.py 核心功能):
-    /// - 场景浏览/上一下一场景/加载/信息/删除(自然排序)
-    /// - 随机替换角色(女/男/全部,保留身高)
-    /// - 角色快速编辑(服装/Kinematic/身高/位置)
-    /// - Timeline 控制(播放/暂停/停止/进度/时间缩放)
-    /// - FSS 文件夹子场景切换
+    /// 场景播放器：场景浏览/上下一张/加载/删除（自然排序）、随机替换角色、
+    /// 角色快速编辑、Timeline 控制、FSS 子场景切换。
     /// </summary>
     public static partial class ScenePlayerModule
     {
@@ -28,13 +24,6 @@ namespace KKPEHeightLock
         // FSS 状态
         private static System.Collections.Generic.List<Studio.OCIChar> _fssChars = new System.Collections.Generic.List<Studio.OCIChar>();
         private static int _fssIndex = -1;
-        private static bool _fssMode;
-
-        // 当前编辑角色
-        private static Studio.OCIChar _editChar;
-
-        // 时间缩放
-        private static float _timeScale = 1f;
 
         // ============ 场景浏览 ============
 
@@ -49,71 +38,29 @@ namespace KKPEHeightLock
             return System.IO.Path.Combine(baseDir, _sceneSubdir);
         }
 
-        /// <summary>列出当前场景目录的直接子文件夹。</summary>
-        public static System.Collections.Generic.List<string> ListSubdirs()
-        {
-            var result = new System.Collections.Generic.List<string>();
-            try
-            {
-                string dir = CurrentSceneDir();
-                if (!System.IO.Directory.Exists(dir)) return result;
-                foreach (var d in System.IO.Directory.GetDirectories(dir))
-                    result.Add(System.IO.Path.GetFileName(d));
-                result.Sort(StringComparer.OrdinalIgnoreCase);
-            }
-            catch (Exception) { }
-            return result;
-        }
-
-        /// <summary>进入子目录(多级:追加到当前子目录路径,支持子目录套子目录)。</summary>
-        public static void SetSceneSubdir(string subdir)
-        {
-            if (string.IsNullOrEmpty(subdir)) return;
-            _sceneSubdir = string.IsNullOrEmpty(_sceneSubdir) ? subdir : _sceneSubdir + "/" + subdir;
-            RefreshSceneList();
-        }
-
-        /// <summary>返回上级目录。</summary>
-        public static void GoParentDir()
-        {
-            try
-            {
-                if (string.IsNullOrEmpty(_sceneSubdir))
-                {
-                    // 已在根:跟随当前场景目录,回到配置根
-                    return;
-                }
-                int idx = _sceneSubdir.LastIndexOf('\\');
-                if (idx < 0) idx = _sceneSubdir.LastIndexOf('/');
-                _sceneSubdir = idx >= 0 ? _sceneSubdir.Substring(0, idx) : "";
-                RefreshSceneList();
-            }
-            catch (Exception) { }
-        }
-
         /// <summary>子目录显示名。</summary>
         public static string SceneSubdirLabel()
         {
             return string.IsNullOrEmpty(_sceneSubdir) ? L10n.T("根目录") : _sceneSubdir;
         }
 
-        /// <summary>扫描场景目录(自然排序),目录跟随当前加载场景所在目录;无则用配置 SceneDir。</summary>
+        /// <summary>扫描场景目录（自然排序，递归含子目录）。</summary>
         public static void RefreshSceneList()
         {
             try
             {
                 _sceneFiles.Clear();
-                // 保留当前索引(不重置 -1),否则 ◀▶ 每次刷新后都回到头尾两张,无法推进
+                // 保留当前索引（不重置 -1），否则 ◀▶ 每次刷新后都回到头尾
                 string dir = CurrentSceneDir();
                 if (!System.IO.Directory.Exists(dir)) return;
 
-                // 递归扫描所有子目录的场景卡(用户场景常分散在分类子目录,只扫根目录会漏)
+                // 递归扫描，用户场景常分散在分类子目录里
                 foreach (var f in System.IO.Directory.GetFiles(dir, "*.png", System.IO.SearchOption.AllDirectories))
                     _sceneFiles.Add(f);
                 SortNatural(_sceneFiles);
                 _scenesLoaded = true;
 
-                // 定位当前加载的场景(用 savePath 文件名);找不到则保留原索引(夹紧到合法范围)
+                // 定位当前加载的场景（按文件名），找不到就夹紧原索引
                 if (!string.IsNullOrEmpty(Studio.Studio.savePath))
                 {
                     string cur = System.IO.Path.GetFileNameWithoutExtension(Studio.Studio.savePath);
@@ -157,10 +104,8 @@ namespace KKPEHeightLock
                 if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return;
                 KKPEHeightLockPlugin.Log.LogMessage($"ScenePlayer: loading {path}");
 
-                // 用 Studio 原生"加载场景协程"(Studio.Studio.LoadSceneCoroutine,public),
-                // 与 UI 加载走同一条流程,且 JetPack 等插件的 VR 恢复 patch 挂在此协程上,
-                // 加载完成后会自动恢复 VR 相机/手柄(直接用 studio.LoadScene 会跳过,
-                // 导致加载后镜头锁死、Ermin VR 手消失)
+                // 用 Studio 原生加载协程：JetPack 等插件的 VR 恢复 patch 挂在这条协程上，
+                // 直接用 studio.LoadScene 会跳过，导致加载后镜头锁死、VR 手消失
                 var studio = Singleton<Studio.Studio>.Instance;
                 if (studio == null) return;
                 var coroutine = studio.LoadSceneCoroutine(path);

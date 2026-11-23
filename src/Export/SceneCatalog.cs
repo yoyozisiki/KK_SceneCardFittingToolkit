@@ -51,9 +51,6 @@ namespace KKPEHeightLock
         /// <summary>扫描结果（按「目录 → 文件名自然排序」排好）。只读用，别改。</summary>
         public static List<SceneEntry> Items { get { return _items; } }
 
-        /// <summary>扫描根目录（互相不嵌套）。</summary>
-        public static List<string> Roots { get { return _roots; } }
-
         /// <summary>状态行文案（「共 N 张 / M 个目录」或错误信息）。</summary>
         public static string Info { get { return _info; } }
 
@@ -320,15 +317,6 @@ namespace KKPEHeightLock
                 if (s.Length > 0) keep.Add(s);
             }
             return string.Join("/", keep.ToArray());
-        }
-
-        /// <summary>目录名（路径最后一段）。</summary>
-        public static string RootName(string p)
-        {
-            if (string.IsNullOrEmpty(p)) return "";
-            string s = p.Replace('/', '\\').TrimEnd('\\');
-            int cut = s.LastIndexOf('\\');
-            return cut >= 0 ? s.Substring(cut + 1) : s;
         }
 
         /// <summary>配置里的相对路径 → 绝对路径（相对游戏根目录）。</summary>

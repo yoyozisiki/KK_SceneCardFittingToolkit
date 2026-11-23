@@ -7,11 +7,7 @@ namespace KKPEHeightLock
     public static partial class AutoExport
     {
         // ======================================================== 体型快照
-        /// <summary>
-        /// 一套体型数据（从角色卡或场景原角色身上抓下来的快照）。
-        /// 和外部脚本的 CharaCtl.BodyData 完全一致：只处理 female，男卡的
-        /// fileBody 语义不同，套「保留体型」会把头发写坏。
-        /// </summary>
+        /// <summary>一套体型数据（角色卡或场景原角色身上的快照）。只处理 female。</summary>
         public class BodySnap
         {
             public float[] shape;
@@ -54,12 +50,8 @@ namespace KKPEHeightLock
                 catch (Exception e) { Log("读取体型失败：" + e.Message); return null; }
             }
             /// <summary>
-            /// 换装后把体型/乳量**原样恢复**成换装前那一份（不套 ShapeFromScene / BustFromScene 配置）。
-            ///
-            /// 为什么不复用 Compose：ApplyClothes 里的快照是「换装前」的，而那时
-            /// ReplaceFemale 已经按配置处理过一遍了；再走 Compose 的 BustFromScene 分支，
-            /// 会拿这份快照当「场景值」二次覆盖 —— 表现就是乳量被改回角色卡的值。
-            /// 换装本身不该改变体型/乳量，所以这里直接按快照还原。
+            /// 把体型/乳量原样恢复成快照。换装不该改变体型，所以这里不走 Compose 的
+            /// 来源开关，直接按快照写回。
             /// </summary>
             public static void RestoreAll(Studio.OCIChar oci, BodySnap snap)
             {
@@ -85,9 +77,8 @@ namespace KKPEHeightLock
             }
 
             /// <summary>
-            /// 按三个维度把「角色卡」和「场景原角色」的体型合成一份写回。
-            /// 顺序：先拿角色卡当底 → 按需整份换成场景的 → 再按需把乳量组盖上去，
-            /// 这样「体型用场景 + 乳量用角色卡」这种反向组合也正确。
+            /// 按三个开关把「角色卡」和「场景原角色」的体型合成一份写回：
+            /// 先拿角色卡当底 → 按需整份换成场景的 → 再按需把乳量组盖上去。
             /// </summary>
             public static void Compose(Studio.OCIChar oci, BodySnap scene, BodySnap card, ExportOptions o)
             {

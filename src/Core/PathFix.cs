@@ -4,18 +4,10 @@ using System.Text;
 namespace KKPEHeightLock
 {
     /// <summary>
-    /// BepInEx 的 cfg 读取器把 `\a \b \t \n \v \f \r` 当**转义序列**处理。
-    /// 磁盘路径里只要出现这种组合（比如
-    /// `...\chara\female\animfriend 07.png` 里的 `\a`），读回来就变成 BEL(0x07)：
-    ///
-    ///   * `Path.GetFileNameWithoutExtension` 直接抛
-    ///     `ArgumentException: Illegal characters in path`，
-    ///     IMGUI 里表现就是**整个批量导出面板全黑**（每帧都在抛，画不到任何控件）；
-    ///   * 路径本身也不存在了，角色卡 / 场景卡全都「加载失败」。
-    ///
-    /// 对策两条，读和写都堵上：
-    ///   * 读：<see cref="Read"/> 把控制字符还原成 `\a` 这样的原文，路径就恢复原样；
-    ///   * 写：<see cref="ToConfig"/> 统一存成 `/`，天然不含转义序列，以后读回来也不会错。
+    /// BepInEx 读 cfg 时会把 `\a \b \t \n` 之类当转义序列，磁盘路径里的这种组合
+    /// （如 `\chara\female\...` 里的 `\a`）读回来会变成控制字符，导致路径失效、
+    /// Path.GetFileName 抛 Illegal characters in path。
+    /// 对策：读时把控制字符还原成 `\a` 原文；写时统一存成 `/`，以后不会再被转义。
     /// </summary>
     internal static class PathFix
     {

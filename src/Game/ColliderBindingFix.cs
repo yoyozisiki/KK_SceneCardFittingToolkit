@@ -6,16 +6,12 @@ using HarmonyLib;
 namespace KKPEHeightLock
 {
     /// <summary>
-    /// 关掉 KKPE 每个 Dynamic Bone Collider 的「**Enable New Dynamic Bones**」开关。
+    /// 关掉 KKPE 每个 Dynamic Bone Collider 的「Enable New Dynamic Bones」。
     ///
-    /// 这是 hongcha 那类场景「换人后饰品头发被吸进脸/身体」的正解（社区实证）：
-    /// 该开关开着时，角色一换、**新出现的动骨会被自动登记进碰撞体的影响列表**，
-    /// 新卡上饰品头发的骨链瞬间变成碰撞对象，于是被吸走。
-    ///
-    /// 对应字段（Mono.Cecil 从 KKSPE.dll 读出）：
-    ///   HSPE.AMModules.CollidersEditor._addNewDynamicBonesAsDefault : Boolean
-    ///
-    /// 关键：必须在 ChangeChara **之前**关掉，否则新骨骼已经登记进去了。
+    /// 开关开着时，换人后新出现的动骨会被自动登记进碰撞体影响列表，
+    /// 饰品头发的骨链瞬间变成碰撞对象 → 被吸进脸/身体。
+    /// 字段：HSPE.AMModules.CollidersEditor._addNewDynamicBonesAsDefault。
+    /// 必须在 ChangeChara 之前关，否则新骨骼已经登记进去了。
     /// </summary>
     internal static class ColliderBindingFix
     {

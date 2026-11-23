@@ -11,8 +11,8 @@ using UnityEngine;
 namespace KKPEHeightLock
 {
     /// <summary>
-    /// 左侧工具栏按钮(类似 KKPE/VNGE 的小方块)打开配置窗口:
-    /// 选择女/男替换角色卡(工作室原生文件选择器)、开关、立即替换。
+    /// 左侧工具栏按钮（KKPE/VNGE 那种小方块）打开配置窗口：
+    /// 选替换角色卡、开关、立即替换；第二个按钮打开批量导出面板。
     /// </summary>
     public static partial class ConfigPanel
     {

@@ -11,9 +11,8 @@ namespace KKPEHeightLock
     public static partial class AutoExport
     {
         // ================================================== 导出期的「清场」模式
-        // ReShade 抓的是 present 之后的最终画面，所以**任何**插件画在屏上的东西
-        // 都会原样进视频：IMGUI 窗口、uGUI 面板、独立的控制台窗口，一个都跑不掉。
-        // 导出期间必须把整个屏幕清空，只留游戏画面（和淡入淡出的黑场）。
+        // ReShade 抓的是 present 之后的最终画面，任何插件画在屏上的东西都会进视频，
+        // 所以导出期间要把 uGUI / IMGUI / 控制台窗口全部收掉，只留游戏画面。
 
         /// <summary>被临时 enabled=false 的 IMGUI 组件。</summary>
         private static readonly List<KeyValuePair<Behaviour, bool>> _mutedBehaviours
@@ -62,11 +61,8 @@ namespace KKPEHeightLock
 
         /// <summary>
         /// 进入清场模式：藏掉所有 Canvas、藏掉控制台窗口。
-        ///
-        /// **IMGUI 不在这里关** —— `enabled = false` 会连带停掉那个组件的
-        /// `Update`，而场景加载阶段正是这些组件在摆相机、放地图、跑 Timeline。
-        /// 早关的结果是：卡载进来了，相机还停在默认位置（对着天花板），
-        /// 动画也不动。所以 IMGUI 只在真正开录前那一小段关掉，见 EnforceCinemaMode。
+        /// IMGUI 不在这里关 —— enabled=false 会连带停掉 Update，
+        /// 而场景加载阶段正靠这些组件摆相机、跑 Timeline。见 EnforceCinemaMode。
         /// </summary>
         public static void EnterCinemaMode()
         {
@@ -82,8 +78,7 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 换场景后重新扫一遍。场景加载会新建 Canvas / 新组件，
-        /// 只靠导出前那一次会漏掉。
+        /// 换场景后重新扫一遍：场景加载会新建 Canvas / 新组件，只靠导出前那一次会漏掉。
         /// </summary>
         public static void EnforceCinemaMode()
         {
@@ -146,16 +141,14 @@ namespace KKPEHeightLock
 
         /// <summary>
         /// 把所有「自己声明了 OnGUI」的 MonoBehaviour 置 enabled = false。
-        /// 只关 enabled，不动 GameObject —— `SetActive(false)` 会连带
-        /// 把挂在 `BepInEx_Manager` 上的整条插件链停掉（踩过，导出直接跑死）。
+        /// 只关 enabled，不动 GameObject —— SetActive(false) 会连带停掉整条插件链。
         /// </summary>
         private static readonly StringBuilder _muteNames = new StringBuilder();
         private static readonly StringBuilder _skipNames = new StringBuilder();
 
         /// <summary>
-        /// 这几个即使有 Update 也照关。`BepInEx.MessageCenter` 就是左上角那一片
-        /// 白字日志的绘制者 —— 它的 Update 只管淡出计时，停掉不影响场景。
-        /// 不关它，淡入淡出的黑底上就会浮出一层白字。
+        /// 这几个即使有 Update 也照关。BepInEx.MessageCenter 就是左上角那一片白字日志，
+        /// 不关的话淡入淡出的黑底上会浮出一层白字。
         /// </summary>
         private static readonly string[] MuteAnywayList =
         {
@@ -206,11 +199,8 @@ namespace KKPEHeightLock
                         try { objs = Resources.FindObjectsOfTypeAll(t); }
                         catch (Exception) { continue; }
                         if (objs.Length == 0) continue;
-                        // 只关「除了画 GUI 什么都不干」的组件。
-                        // 有 Update/LateUpdate 的不能关 —— 关了就把它那一份逻辑
-                        // 一起停了：VNGE 的脚本、胸部物理、NodesConstraints 的
-                        // 约束全都在 Update 里跑，一关动画和物理就冻住，
-                        // 录出来是一张静止图（踩过）。
+                        // 只关「除了画 GUI 什么都不干」的组件：有 Update/LateUpdate 的不能关，
+                        // 否则 VNGE 脚本、胸部物理、NodesConstraints 都会停，录出来是静止图。
                         if (HasUnityTick(t) && !MuteAnyway(full))
                         {
                             if (_skipNames.Length > 0) _skipNames.Append("　");
@@ -257,12 +247,9 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 藏掉本进程的 `ConsoleWindowClass` 窗口（`Unity.Console` 给本进程
-        /// AllocConsole 出来的真窗口，标题 `Unity Console`）。
-        ///
-        /// 走过的坑：`SetActive(false)` 会误伤 `BepInEx_Manager`；
-        /// 反射调 `ConsolePlugin.Toggle()` 是**反的** —— 它的 `_enable`
-        /// 表示「控制台功能启用」，不是「窗口可见」，一 Toggle 反而把它点开。
+        /// 藏掉本进程的 ConsoleWindowClass 窗口（Unity 控制台）。
+        /// 反射调 ConsolePlugin.Toggle() 是反的：它的 _enable 表示「功能启用」，
+        /// 不是「窗口可见」，一 Toggle 反而把它打开。
         /// </summary>
         private static void HideConsoleWindows()
         {

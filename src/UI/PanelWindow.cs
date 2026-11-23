@@ -5,9 +5,7 @@ namespace KKPEHeightLock
 {
     /// <summary>
     /// 批量导出窗口的外壳：开关、布局、底栏、运行中界面、日志。
-    ///
-    /// 其余部分按职责拆在 UiTheme / UiWidgets / SceneLibrary / SceneTree / SettingsPanel 里，
-    /// 都是同一个 partial class。
+    /// 其余部分按职责拆在 UiTheme / UiWidgets / SceneCatalog / SceneGrid / SettingsPanel 里。
     /// </summary>
     public static partial class AutoExportPanel
     {
@@ -35,20 +33,12 @@ namespace KKPEHeightLock
             if (_visible) SceneCatalog.Ensure();
         }
 
-        public static void Show()
-        {
-            _visible = true;
-            SceneCatalog.Ensure();
-        }
-
         internal static void OnGUI()
         {
             if (!_visible) return;
             InitTheme();
 
-            // 面板要压在所有别的插件窗口上面，鼠标事件也得我们先拿到：
-            // GUI.depth 越小越靠上、越先吃事件，否则别的插件的全屏控件会把
-            // MouseDown 吃掉，表现就是「画出来了但点不动」。
+            // 面板要压在其他插件窗口上面，并且先拿到鼠标事件（GUI.depth 越小越靠上）
             int oldDepth = GUI.depth;
             GUI.depth = -2000;
             try
@@ -122,9 +112,8 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// 单块内容出错时兜住异常：Begin/End 仍然配对，面板继续能用，
-        /// 只在那一块显示错误，而不是整块变黑（v2.0.1 之前就是这样被一个
-        /// 非法路径字符搞成黑板的）。同一个错误只记一次日志。
+        /// 单块内容出错时兜住异常：Begin/End 仍能配对，只在那一块显示错误，
+        /// 而不是整块变黑。同一个错误只记一次日志。
         /// </summary>
         private static void Guard(string where, Action draw)
         {
@@ -170,8 +159,7 @@ namespace KKPEHeightLock
                     L10n.T("默认"), _btn))
                 KKPEHeightLockPlugin.ExportOutputDir.Value = "";
 
-            // 预览：先切场景 + 走完替换 female 的整套流程，但不调 VideoExport 录制、
-            // 也不隐藏界面。所以它**不需要** VideoExport 就绪。
+            // 预览：走完替换流程但不录制、不隐藏界面，所以不需要 VideoExport 就绪
             bool busy = AutoExport.Running;
             bool old = GUI.enabled;
             GUI.enabled = !busy && SceneCatalog.CheckedCount > 0;

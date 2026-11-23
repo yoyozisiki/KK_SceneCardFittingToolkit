@@ -12,9 +12,9 @@ namespace KKPEHeightLock
         private static Texture2D _texBlack, _texPanel, _texPanel2, _texRowHi;
         private static Texture2D _texBtn, _texBtnHi, _texAccent, _texField, _texLine;
 
-        private static GUIStyle _win, _label, _labelSm, _labelBold, _section, _head;
+        private static GUIStyle _win, _label, _labelSm, _labelBold, _section;
         private static GUIStyle _btn, _btnAccent, _btnSm, _toggle, _field, _panel, _line;
-        private static GUIStyle _row, _rowOn, _rowFolder, _arrow, _checkOn, _checkOff;
+        private static GUIStyle _arrow, _checkOn, _checkOff;
         private static GUIStyle _badge, _tile, _tileOn, _tileName, _tileSub, _tileSubOn;
 
         internal static GUIStyle ThemeWindow { get { InitTheme(); return _win; } }
@@ -25,13 +25,8 @@ namespace KKPEHeightLock
         internal static GUIStyle ThemeLabel { get { InitTheme(); return _label; } }
         internal static GUIStyle ThemeLabelSm { get { InitTheme(); return _labelSm; } }
         internal static GUIStyle ThemeLabelBold { get { InitTheme(); return _labelBold; } }
-        internal static GUIStyle ThemeSection { get { InitTheme(); return _section; } }
         internal static GUIStyle ThemeField { get { InitTheme(); return _field; } }
         internal static GUIStyle ThemePanel { get { InitTheme(); return _panel; } }
-        internal static GUIStyle ThemeRow { get { InitTheme(); return _row; } }
-        internal static GUIStyle ThemeRowOn { get { InitTheme(); return _rowOn; } }
-        internal static GUIStyle ThemeRowFolder { get { InitTheme(); return _rowFolder; } }
-        internal static GUIStyle ThemeArrow { get { InitTheme(); return _arrow; } }
         internal static GUIStyle ThemeTile { get { InitTheme(); return _tile; } }
         internal static GUIStyle ThemeTileOn { get { InitTheme(); return _tileOn; } }
         internal static GUIStyle ThemeTileName { get { InitTheme(); return _tileName; } }
@@ -124,12 +119,6 @@ namespace KKPEHeightLock
             _section.fontStyle = FontStyle.Bold;
             _section.normal.textColor = new Color(0.45f, 0.78f, 1f);
 
-            // 列表表头：小一号、灰字
-            _head = new GUIStyle(_labelSm);
-            _head.fontSize = 13;
-            _head.alignment = TextAnchor.MiddleLeft;
-            _head.normal.textColor = new Color(0.62f, 0.62f, 0.62f);
-
             _btn = new GUIStyle(GUI.skin.button);
             _btn.fontSize = 15;
             _btn.padding = new RectOffset(8, 8, 5, 5);
@@ -164,25 +153,7 @@ namespace KKPEHeightLock
             _line.border = new RectOffset(0, 0, 0, 0);
             _line.margin = new RectOffset(0, 0, 6, 6);
 
-            _row = new GUIStyle(_label);
-            _row.fontSize = 14;
-            _row.padding = new RectOffset(6, 6, 3, 3);
-            _row.alignment = TextAnchor.MiddleLeft;
-            _row.normal.background = _texPanel2;
-            _row.hover.background = _texRowHi;
-            _row.normal.textColor = Color.white;
-
-            _rowOn = new GUIStyle(_row);
-            _rowOn.normal.background = _texAccent;
-            _rowOn.hover.background = _texAccent;
-
-            _rowFolder = new GUIStyle(_row);
-            _rowFolder.fontStyle = FontStyle.Bold;
-            _rowFolder.normal.background = _texPanel;
-            _rowFolder.hover.background = _texRowHi;
-            _rowFolder.normal.textColor = new Color(0.62f, 0.82f, 1f);
-
-            // 折叠箭头：18 号字，够大看得清；底色跟目录行一致，不显边框
+            // 小方框按钮的基础样式：18 号字，底色跟面板一致，不显边框
             _arrow = new GUIStyle(_btn);
             _arrow.fontSize = 18;
             _arrow.alignment = TextAnchor.MiddleCenter;

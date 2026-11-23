@@ -1,38 +1,26 @@
-using System;
 using System.Collections.Generic;
-using System.IO;
 using UnityEngine;
 
 namespace KKPEHeightLock
 {
-    /// <summary>
-    /// 批量导出的一组参数。等价于 autoexport/recorder.py 里的 ExportOptions，
-    /// 只是从「外部脚本 + 热键模拟」变成了「游戏内直接调 API」。
-    /// </summary>
+    /// <summary>批量导出的一组参数。</summary>
     public class ExportOptions
     {
-        /// <summary>要导出的场景卡（绝对路径），顺序就是成片顺序。</summary>
+        /// <summary>要导出的场景卡（绝对路径），顺序即成片顺序。</summary>
         public List<string> Scenes = new List<string>();
 
-        /// <summary>
-        /// 【主角色卡】。场景里**第一个** female 换成这张卡；
-        /// 场景里有多个 female 时，剩下的用 <see cref="SubCards"/> 替换。
-        /// 空 = 不区分主次，全部按次角色卡替换。
-        /// </summary>
+        /// <summary>主角色卡：场景里第一个 female 换成这张。空 = 全部按次卡处理。</summary>
         public string FemaleCard = "";
 
-        /// <summary>
-        /// 【次角色卡】列表，顺序就是编号顺序（1、2、3…）。
-        /// 主卡没选时，第一个 female 也从这个列表里取。
-        /// </summary>
+        /// <summary>次角色卡列表，顺序即编号（1、2、3…）。主卡为空时第一个 female 也从这里取。</summary>
         public List<string> SubCards = new List<string>();
 
-        /// <summary>次角色卡的替换顺序：false = 数字优先，true = 随机。</summary>
+        /// <summary>次卡分配顺序：false = 数字优先，true = 随机。</summary>
         public bool SubRandom;
 
         public bool ReplaceFemale = true;
 
-        // 体型三个维度各自取自哪里：false = 角色卡，true = 场景原角色
+        // 体型四项：false = 取自角色卡，true = 取自场景原角色
         public bool ShapeFromScene;
         public bool BustFromScene;
         public bool BoneFromScene;
@@ -41,53 +29,21 @@ namespace KKPEHeightLock
         public bool Decensor = true;
         public bool RemoveSpheres = true;
 
-        /// <summary>
-        /// 时长下限（秒）。规则只有一条：
-        ///   * 卡里有 Timeline 且比这个长 → 按 Timeline 录
-        ///   * 卡里没 Timeline，或 Timeline 比这个短 → 录这么久（短卡循环补齐）
-        /// 等价于 content = max(timeline 秒数, MinSeconds)。
-        /// 和 4_AutoSceneExport 的「按 Timeline + 短卡循环补齐到」是同一个意思，
-        /// 只是把两个开关收成了一个数字，省得配出「两个都关」这种没意义的状态。
-        /// </summary>
+        /// <summary>时长下限（秒）：正片 = max(Timeline 秒数, MinSeconds)，短卡循环补齐。</summary>
         public float MinSeconds = 5f;
 
-        /// <summary>
-        /// 淡入淡出时长（秒，首尾各一份）。和 4_AutoSceneExport 一样：
-        /// 头尾各**多录**这么多秒（时间轴照常往前跑，不是定格），
-        /// 后期再用 ffmpeg 的 fade 把多出来的部分压成黑场，正片一秒不少。
-        /// 设 0 = 不录多余、也不淡。
-        /// </summary>
+        /// <summary>淡入淡出时长（秒，首尾各一份）。头尾各多录这么多秒并压黑场，0 = 不做。</summary>
         public float FadeSeconds = 1f;
 
         public int Fps = 60;
 
-        /// <summary>
-        /// 切到第几套预设服装（对应 chaFile.coordinate 槽位）。-1 = 不改变。
-        /// -2 = 随机：每个 female 从**自己卡片里真的有衣服**的槽位里随机挑一套。
-        /// 注意：切套装会把 shapeValueBody 冲掉，所以必须在体型合成之前应用。
-        /// </summary>
+        /// <summary>切到第几套预设服装（coordinate 槽位）。-1 = 不改，-2 = 随机（只从卡里真有衣服的槽位挑）。</summary>
         public int Outfit = -1;
 
-        /// <summary>
-        /// 各部件脱衣状态，按 ChaFileDefine.ClothesKind 的顺序，-1 = 不改。
-        /// 字节语义（游戏原值，不是三档）：0 = 穿，1/2 = 半脱，3 = 脱。
-        /// </summary>
+        /// <summary>各部件脱衣状态，按 ChaFileDefine.ClothesKind 顺序，-1 = 不改。0 穿 / 1、2 半脱 / 3 脱。</summary>
         public int[] ClothesParts;
 
-        // 泛光 / 暗角的强度**不在本插件里配**：参数归 ReShade 面板（Home 键），
-        // 插件只负责保证录制时那条 ReShade 通路开着，绝不改写预设文件。
-        // （原 Vignette / Bloom 两个档位字段 + FxLevel 枚举已删除，见 docs/DEVELOPMENT.md）
-
-        /// <summary>
-        /// 效果在哪做。
-        ///   * false（默认）= 后期在 ffmpeg 里烤进去（泛光/暗角/淡入淡出）
-        ///   * true = 泛光/暗角交给 ReShade 实时做（KK_BloomVignette.fx），
-        ///     截图强制走 Reshade 插件，ffmpeg 后期只留淡入淡出。
-        /// 为什么要这个：实测后期里 90% 的时间花在滤镜上（泛光 10.9s + 暗角 9.0s，
-        /// 而 x264 编码只要 7.1s）。ReShade 在 GPU 上实时做是白送的，
-        /// 关掉这两个滤镜等于每段省 15 秒左右。
-        /// 代价：Reshade 截图是 CPU 回读共享内存，用不了零拷贝。
-        /// </summary>
+        /// <summary>泛光/暗角走 ReShade 实时效果（截图因此固定用 Reshade 插件，用不了零拷贝）。</summary>
         public bool RealtimeFx = false;
 
         /// <summary>输出目录（绝对路径）。</summary>
@@ -100,49 +56,31 @@ namespace KKPEHeightLock
         public int ResizeWidth;
         public int ResizeHeight;
 
-        /// <summary>
-        /// VideoExport 用哪个截图插件，值 = UI 上按钮的序号：
-        /// 0 = Screenshot Manager（KKS_Screencap，抓相机 RenderTexture，
-        ///     只有它能开零拷贝）、1 = Built-in、2 = Reshade、3 = Win32。
-        /// 实测 0 就是 Screencap，日志里 [ZeroCopy] eligible 那行 rtCapture=True 可证。
-        /// </summary>
+        /// <summary>VideoExport 的截图插件序号：0 Screencap / 1 Built-in / 2 Reshade / 3 Win32。</summary>
         public int ScreenshotPluginIndex = 0;
 
         /// <summary>逐帧录制时放开帧率上限（关垂直同步）。</summary>
         public bool UncapFps = true;
 
-        /// <summary>
-        /// 预览模式：只切场景 + 走完替换 female 的整套准备流程（时序与导出完全一致），
-        /// **不调用 VideoExport 录制**、也不隐藏界面。用来在正式导出前看效果。
-        /// </summary>
+        /// <summary>预览模式：走完准备流程但不录制、不隐藏界面。</summary>
         public bool PreviewOnly;
 
-        /// <summary>
-        /// 全局 female 皮肤卡路径（绝对路径；空 = 不应用）。
-        /// 替换完 female 后，把这张卡的 face + body 套给所有 female（体型保持原样）。
-        /// </summary>
+        /// <summary>全局 female 皮肤卡（绝对路径；空 = 不应用）。只套 face + body，体型另存另还原。</summary>
         public string GlobalSkinCard = "";
 
-        /// <summary>
-        /// male 半透明度：0 = 不处理，0~1 = 透明度（越小越透）。
-        /// 作用于 male 的身体、服装、饰品（换透明 shader + alpha 混合）。
-        /// </summary>
+        /// <summary>male 透明度：0 = 不处理，0~1 = 越小越透。</summary>
         public float MaleAlpha;
 
-        /// <summary>淡入淡出总共要额外录多少秒（首尾各 FadeSeconds）。</summary>
+        /// <summary>淡入淡出总共额外录多少秒（首尾各 FadeSeconds）。</summary>
         public float FadePad
         {
             get { return Mathf.Max(0f, FadeSeconds) * 2f; }
         }
 
-        /// <summary>
-        /// 淡入淡出是不是在录制时直接画上去（直出）。
-        /// 只要设了时长就走这条路 —— 不依赖 RealtimeFx，也不需要 ffmpeg 后期。
-        /// </summary>
+        /// <summary>淡入淡出是否在录制时直接画黑场（设了时长就走这条，不依赖 RealtimeFx）。</summary>
         public bool RealtimeFade
         {
             get { return FadeSeconds > 0f; }
         }
-
     }
 }

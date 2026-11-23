@@ -46,12 +46,6 @@ namespace KKPEHeightLock
         public static void TimelinePause() { try { Timeline.Timeline.Pause(); } catch (Exception) { } }
         public static void TimelineStop() { try { Timeline.Timeline.Stop(); } catch (Exception) { } }
         public static void TimelineSeek(float t) { try { Timeline.Timeline.Seek(t); } catch (Exception) { } }
-        public static void TimelineSetTimeScale(float s)
-        {
-            _timeScale = s;
-            try { UnityEngine.Time.timeScale = s; } catch (Exception) { }
-        }
-        public static float TimelineTimeScale { get { return _timeScale; } }
 
         // Timeline 相机插值项名(同 sceneplayer.py)
         private static readonly string[] TL_CAMERA_INTERPOLABLE_NAME =
