@@ -211,12 +211,36 @@ namespace KKPEHeightLock
             if (int.TryParse(s, out v) && v >= 0 && v <= 99999) e.Value = v;
         }
 
+        // 正在编辑的浮点输入框原文（按配置项缓存）。
+        // 不缓存的话每帧都从 Value 重建文本：输 "0." 会被 TryParse 成 0 再刷回 "0"，
+        // 小数点根本打不进去。
+        private static readonly System.Collections.Generic.Dictionary<
+            BepInEx.Configuration.ConfigEntry<float>, string> _floatEdit
+            = new System.Collections.Generic.Dictionary<BepInEx.Configuration.ConfigEntry<float>, string>();
+
         private static void FloatField(BepInEx.Configuration.ConfigEntry<float> e, float w)
         {
-            string s = GUILayout.TextField(e.Value.ToString("0.##"), _field,
-                GUILayout.Width(w), GUILayout.Height(28));
+            string ctrl = "ff_" + e.Definition.Section + "_" + e.Definition.Key;
+            GUI.SetNextControlName(ctrl);
+
+            string text;
+            if (!_floatEdit.TryGetValue(e, out text)) text = e.Value.ToString("0.##");
+            string s = GUILayout.TextField(text, _field, GUILayout.Width(w), GUILayout.Height(28));
+
+            if (GUI.GetNameOfFocusedControl() == ctrl)
+            {
+                if (s != text) _floatEdit[e] = s;          // 编辑中：保留用户原文
+            }
+            else
+            {
+                _floatEdit.Remove(e);                      // 失焦：回到配置值显示
+            }
+
+            // 结尾是小数点时先不提交，否则 "0." 会被当成 0
             float v;
-            if (float.TryParse(s, out v) && v >= 0f && v <= 99999f) e.Value = v;
+            if (!s.TrimEnd().EndsWith(".")
+                && float.TryParse(s, out v) && v >= 0f && v <= 99999f)
+                e.Value = v;
         }
 
         // ---------------------------------------------------------------- 小工具

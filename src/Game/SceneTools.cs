@@ -302,10 +302,18 @@ namespace KKPEHeightLock
                     catch (Exception) { }
                 }
 
+                // Reflect() 是按 LightCalc 内部值重刷灯的，会把上面压下去的值盖回去
+                // （日志里出现过「1 → 1，上限 0.9，已下调」）。所以最后再直接压一次。
+                if (light != null && light.intensity > max) light.intensity = max;
+
+                float after = light != null ? light.intensity : -1f;
+                bool ok = light == null || after <= max + 0.001f;
                 KKPEHeightLockPlugin.Log.LogMessage(
                     "SceneTools: 角色光照亮度 "
-                    + (light != null ? (before.ToString("0.##") + " → " + light.intensity.ToString("0.##")) : "（没找到灯）")
-                    + "（上限 " + max.ToString("0.##") + "，" + (changed ? "已下调" : "无需调整") + "）");
+                    + (light != null ? (before.ToString("0.##") + " → " + after.ToString("0.##")) : "（没找到灯）")
+                    + "（上限 " + max.ToString("0.##") + "，"
+                    + (ok ? (changed ? "已下调" : "无需调整") : "压制失败，当前仍是 " + after.ToString("0.##"))
+                    + "）");
             }
             catch (Exception e)
             {
@@ -314,13 +322,14 @@ namespace KKPEHeightLock
         }
 
         /// <summary>
-        /// KKUSS 材质过曝抑制：ShadowPower 越小越亮（默认 0.85，卡里常被调到 0.5），
-        /// 这里把低于 minShadowPower 的抬回去。不动 Addcolor（作者调过的配色）。
+        /// 衣物/饰品过曝抑制：只处理 shader 为 <c>KKUSSitem</c> 的材质（这些卡里最常用的默认材质），
+        /// ShadowPower 越小越亮（卡里常被调到 0.5），低于 minShadowPower 的抬回去。
+        /// 不碰皮肤 / 脸的材质，也不动 Addcolor。
         /// </summary>
-        public static void ClampKkussOverexposure(float minShadowPower = 0.85f)
+        public static void ClampKkussOverexposure(float minShadowPower)
         {
-            int scanned = 0, spChanged = 0;
-            float spMin = 9f;
+            int scanned = 0, changed = 0;
+            string names = "";
             try
             {
                 var studio = Singleton<Studio.Studio>.Instance;
@@ -344,19 +353,19 @@ namespace KKPEHeightLock
                             {
                                 var mat = mats[m];
                                 if (mat == null || mat.shader == null) continue;
-                                // 不按 shader 名过滤：凡是带 ShadowPower 属性的材质都处理，
-                                // 原生 shader / KKUSS / xukmi 都可能暴露这个参数。
+
+                                string sn = mat.shader.name ?? "";
+                                if (sn.IndexOf("KKUSSitem", StringComparison.OrdinalIgnoreCase) < 0) continue;
                                 scanned++;
+                                if (names.Length < 300 && names.IndexOf(sn, StringComparison.OrdinalIgnoreCase) < 0)
+                                    names += (names.Length > 0 ? " | " : "") + sn;
 
                                 float sp;
-                                if (GetFloatAny(mat, ShadowPowerNames, out sp))
+                                if (GetFloatAny(mat, ShadowPowerNames, out sp)
+                                    && sp < minShadowPower - 0.001f)
                                 {
-                                    if (sp < spMin) spMin = sp;
-                                    if (sp < minShadowPower - 0.001f)
-                                    {
-                                        SetFloatAny(mat, ShadowPowerNames, minShadowPower);
-                                        spChanged++;
-                                    }
+                                    SetFloatAny(mat, ShadowPowerNames, minShadowPower);
+                                    changed++;
                                 }
                             }
                         }
@@ -364,9 +373,9 @@ namespace KKPEHeightLock
                     catch (Exception) { }
                 }
                 KKPEHeightLockPlugin.Log.LogMessage(
-                    "SceneTools: 过曝抑制 扫了 " + scanned + " 个材质"
-                    + "，ShadowPower 抬回 0.85 的 " + spChanged + " 个"
-                    + "（最低见到 " + (spMin < 9f ? spMin.ToString("0.##") : "无") + "）");
+                    "SceneTools: 过曝抑制 扫了 " + scanned + " 个 KKUSSitem 材质，抬回 "
+                    + minShadowPower.ToString("0.##") + " 的 " + changed + " 个"
+                    + (names.Length > 0 ? "（shader: " + names + "）" : "（没找到 KKUSSitem 材质）"));
             }
             catch (Exception e)
             {
@@ -766,7 +775,7 @@ namespace KKPEHeightLock
                 }
             }
 
-            // 诊断：仍然没改到，就把属性名列出来，下次看日志能直接看到真名
+            // 没改到就把属性名带回日志，方便定位 shader 的真实属性名
             if (!touched && logShaders.Length < 1200)
             {
                 string props = "";

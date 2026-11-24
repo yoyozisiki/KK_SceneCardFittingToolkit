@@ -69,10 +69,15 @@ namespace KKPEHeightLock
 
             // ---- 1-c) 角色光照亮度封顶
             // 只压 CameraLightCtrl 里那盏角色灯（KKUSS/KKUTS 材质几乎只吃它），不动场景灯光。
-            SetPhase("限制角色光照…");
-            try { SceneTools.ClampCharacterLighting(0.9f); }
-            catch (Exception e) { Log("角色光照封顶失败：" + e.Message); }
-            yield return null;
+            // 只在应用了全局皮肤卡时才做：材质被换过才需要防过曝，否则保留场景原亮度。
+            bool clampLight = o.ClampCharLight > 0f && !string.IsNullOrEmpty(o.GlobalSkinCard);
+            if (clampLight)
+            {
+                SetPhase("限制角色光照…");
+                try { SceneTools.ClampCharacterLighting(o.ClampCharLight); }
+                catch (Exception e) { Log("角色光照封顶失败：" + e.Message); }
+                yield return null;
+            }
 
             // ---- 2) 替换 female（含体型三维来源：体型滑块 / 乳量物理 / 骨架类型 / 身高）
             // 主卡换第一个显示角色，其余显示角色按次卡列表；隐藏角色一律用主卡。
@@ -103,15 +108,7 @@ namespace KKPEHeightLock
             while (cloth.MoveNext()) yield return cloth.Current;
 
             // ---- 2-b2) 全局 female 皮肤（face + body 材质）
-            // 从本地缓存应用，缓存由批量开始时的 SkinMaterialCache.EnsureCache 生成一次。
-            if (!string.IsNullOrEmpty(o.GlobalSkinCard))
-            {
-                SetPhase("应用全局皮肤…");
-                try { SkinMaterialCache.ApplyToAll(o.GlobalSkinCard); }
-                catch (Exception e) { Log("应用全局皮肤失败：" + e.Message); }
-                yield return null;
-                for (int f = 0; f < 3; f++) yield return null;
-            }
+            // 全局皮肤放到最后一步应用（见 3-e），这里不再处理。
 
             // ---- 2-c) 人物全部弄完之后，才应用时间轴姿态 + 等物理稳定
             //
@@ -171,17 +168,23 @@ namespace KKPEHeightLock
 
             // ---- 3-c0) 角色光照再压一次：换人/换装后 CameraLightCtrl 会 Reflect() 把场景里
             // 保存的光照重新应用，之前压下去的值会被盖回 1.2 那种。
-            SetPhase("再次限制角色光照…");
-            try { SceneTools.ClampCharacterLighting(0.9f); }
-            catch (Exception e) { Log("角色光照再次封顶失败：" + e.Message); }
-            yield return null;
+            if (clampLight)
+            {
+                SetPhase("再次限制角色光照…");
+                try { SceneTools.ClampCharacterLighting(o.ClampCharLight); }
+                catch (Exception e) { Log("角色光照再次封顶失败：" + e.Message); }
+                yield return null;
+            }
 
-            // ---- 3-c) ShadowPower 过曝抑制（低于 0.85 会让浅色衣物整片白）
+            // ---- 3-c) ShadowPower 过曝抑制：只作用于 shader 为 KKUSSitem 的衣物/饰品材质
             // 放在换人/换装之后：这时材质才是最终那套。不动 Addcolor（作者调过的配色）。
-            SetPhase("抑制过曝（ShadowPower）…");
-            try { SceneTools.ClampKkussOverexposure(); }
-            catch (Exception e) { Log("过曝抑制失败：" + e.Message); }
-            yield return null;
+            if (o.MinShadowPower > 0f)
+            {
+                SetPhase("抑制过曝（ShadowPower）…");
+                try { SceneTools.ClampKkussOverexposure(o.MinShadowPower); }
+                catch (Exception e) { Log("过曝抑制失败：" + e.Message); }
+                yield return null;
+            }
 
             // ---- 3-d) male 半透明（身体 + 服装 + 饰品）
             // 放在去码之后：换 shader 会重置材质状态，先做完别的再动它。
@@ -190,6 +193,24 @@ namespace KKPEHeightLock
                 SetPhase("male 半透明…");
                 try { SceneTools.ApplyMaleTransparency(o.MaleAlpha); }
                 catch (Exception e) { Log("male 半透明失败：" + e.Message); }
+                yield return null;
+            }
+
+            // ---- 3-e) 全局皮肤：放在所有角色/材质操作的最后
+            // 换人、换装、光照、过曝、male 半透明都会重建或改写材质，皮肤放前面写了也会被盖回去
+            // （日志里出现过「写入 shader=KKLT/Skin、回读还是 Koikano/main_skin」）。
+            if (!string.IsNullOrEmpty(o.GlobalSkinCard))
+            {
+                SetPhase("应用全局皮肤…");
+                try { SkinMaterialCache.ApplyToAll(o.GlobalSkinCard); }
+                catch (Exception e) { Log("应用全局皮肤失败：" + e.Message); }
+
+                // ReloadNoAsync 和 MaterialEditor 的持久化材质会在后续帧重建材质，
+                // 隔两帧再写一遍（跳过重建那几步），确保最终用的是模板材质。
+                yield return null;
+                yield return null;
+                try { SkinMaterialCache.ApplyToAll(o.GlobalSkinCard, true); }
+                catch (Exception e) { Log("应用全局皮肤（二次）失败：" + e.Message); }
                 yield return null;
             }
 
@@ -206,6 +227,17 @@ namespace KKPEHeightLock
                     yield return new WaitForSeconds(settleSec);
                 }
                 Log($"[时序] 全部准备完成（换人/换装/碰撞体/去码）→ 等物理稳定 {settleSec:0.#}s → 开录");
+            }
+
+            // ---- 3-f) 物理等待结束后再写一遍皮肤
+            // 动骨稳定期间材质可能被 MaterialEditor 的持久化数据重建过一次，
+            // 这里补最后一笔，保证开录时用的就是模板材质。
+            if (!string.IsNullOrEmpty(o.GlobalSkinCard))
+            {
+                try { SkinMaterialCache.ApplyToAll(o.GlobalSkinCard, true); }
+                catch (Exception e) { Log("应用全局皮肤（收尾）失败：" + e.Message); }
+                yield return null;
+                yield return null;
             }
 
             // ---- 预览到此为止：替换/换装/姿态/碰撞体/去码都做完了，直接交回画面。

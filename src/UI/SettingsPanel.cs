@@ -260,6 +260,20 @@ namespace KKPEHeightLock
                 _labelSm, GUILayout.Width(64), GUILayout.Height(24));
             GUILayout.EndHorizontal();
 
+            // 角色光照上限：只在应用了全局皮肤卡时才生效，0 = 不处理
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(L10n.T("光照上限"), _label, GUILayout.Width(96), GUILayout.Height(24));
+            FloatField(KKPEHeightLockPlugin.ExportClampCharLight, 58);
+            GUILayout.Label(L10n.T("仅全局皮肤时生效，0 = 不处理"), _labelSm, GUILayout.Height(24));
+            GUILayout.EndHorizontal();
+
+            // 阴影下限：只对 shader 为 KKUSSitem 的衣物/饰品材质生效
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(L10n.T("阴影下限"), _label, GUILayout.Width(96), GUILayout.Height(24));
+            FloatField(KKPEHeightLockPlugin.ExportMinShadowPower, 58);
+            GUILayout.Label(L10n.T("仅 KKUSSitem 衣物，0 = 不处理"), _labelSm, GUILayout.Height(24));
+            GUILayout.EndHorizontal();
+
             GUILayout.EndScrollView();
 
             // 滚轮自己处理：这个游戏里 IMGUI 收不到 ScrollWheel（被 Studio 的相机缩放吃掉），

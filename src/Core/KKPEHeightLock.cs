@@ -92,6 +92,10 @@ namespace KKPEHeightLock
         internal static ConfigEntry<float> ExportReplaceSettle;
         /// <summary>male 半透明：0 = 不处理，0~1 = 透明度（越小越透）。</summary>
         internal static ConfigEntry<float> ExportMaleAlpha;
+        /// <summary>角色光照亮度上限（0 = 不处理；仅应用全局皮肤时生效）。</summary>
+        internal static ConfigEntry<float> ExportClampCharLight;
+        /// <summary>KKUSSitem 材质的 ShadowPower 下限（0 = 不处理）。</summary>
+        internal static ConfigEntry<float> ExportMinShadowPower;
         /// <summary>全局 female 皮肤卡（相对 UserData 或绝对路径；空 = 不应用）。</summary>
         internal static ConfigEntry<string> ExportGlobalSkinCard;
 
@@ -200,6 +204,15 @@ namespace KKPEHeightLock
             ExportMinSeconds = Config.Bind("AutoExport", "MinSeconds", 5f,
                 "时长下限（秒）。卡里的 Timeline 比这个长就按 Timeline 录；"
                 + "没 Timeline 或 Timeline 比这个短，就录这么久（短卡循环补齐）。");
+            ExportClampCharLight = Config.Bind("AutoExport", "ClampCharLight", 0.9f,
+                new ConfigDescription("角色光照亮度上限。场景卡常把角色灯设到 1~8，过曝就来自这盏灯。\n"
+                    + "只压这盏角色灯，不动场景灯光与环境光。\n"
+                    + "仅当配置了「全局 female 皮肤卡」时才生效；0 = 不处理。",
+                    new AcceptableValueRange<float>(0f, 10f)));
+            ExportMinShadowPower = Config.Bind("AutoExport", "MinShadowPower", 0.85f,
+                new ConfigDescription("衣物/饰品的 ShadowPower 下限（这个值越小越亮，卡里常被调到 0.5 导致过曝）。\n"
+                    + "只处理 shader 为 KKUSSitem 的材质，不碰皮肤与脸。0 = 不处理。",
+                    new AcceptableValueRange<float>(0f, 1f)));
             ExportFadeSeconds = Config.Bind("AutoExport", "FadeSeconds", 1f,
                 "头尾各多录多少秒用于淡入淡出（0 = 不淡入淡出）。");
             ExportReplaceSettle = Config.Bind("AutoExport", "ReplaceSettleSeconds", 3f,

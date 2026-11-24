@@ -35,6 +35,8 @@ namespace KKPEHeightLock
             o.Decensor = KKPEHeightLockPlugin.ExportDecensor.Value;
             o.RemoveSpheres = KKPEHeightLockPlugin.ExportRemoveSpheres.Value;
             o.MaleAlpha = KKPEHeightLockPlugin.ExportMaleAlpha.Value;
+            o.ClampCharLight = KKPEHeightLockPlugin.ExportClampCharLight.Value;
+            o.MinShadowPower = KKPEHeightLockPlugin.ExportMinShadowPower.Value;
             o.GlobalSkinCard = ResolveUserDataPath(KKPEHeightLockPlugin.ExportGlobalSkinCard.Value);
             o.MinSeconds = KKPEHeightLockPlugin.ExportMinSeconds.Value;
             o.FadeSeconds = KKPEHeightLockPlugin.ExportFadeSeconds.Value;

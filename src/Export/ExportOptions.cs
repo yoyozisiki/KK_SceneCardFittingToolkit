@@ -71,6 +71,12 @@ namespace KKPEHeightLock
         /// <summary>male 透明度：0 = 不处理，0~1 = 越小越透。</summary>
         public float MaleAlpha;
 
+        /// <summary>角色光照亮度上限；0 = 不处理，且只有应用了全局皮肤卡时才生效。</summary>
+        public float ClampCharLight = 0.9f;
+
+        /// <summary>KKUSSitem 材质的 ShadowPower 下限；0 = 不处理。</summary>
+        public float MinShadowPower = 0.85f;
+
         /// <summary>淡入淡出总共额外录多少秒（首尾各 FadeSeconds）。</summary>
         public float FadePad
         {
