@@ -15,6 +15,19 @@
 
 ## 2.4.1
 
+### 修复：全局皮肤误把连裤袜网格（cf_m_bodyteights）当成身体材质
+
+`SkinBase()` 原来用 `StartsWith("cf_m_body")`，`cf_m_bodyteights`（nashi Bodytights 那套的连裤袜网格）
+也会命中，被一起换成 `KKLT/Skin`，表现为**鞋子/袜子压到身体上，把鞋子槽关掉就"正常"**（其实只是那块
+网格不再画，身体材质那侧还是错的）。
+
+现在改成按 `cf_m_` 后面那个**英文词**判断，且词后只能跟数字 / 下划线：
+
+- 算：`cf_m_body`、`cf_m_body_00`、`cf_m_body00`、`cf_m_face_00`
+- 不算：`cf_m_bodyteights`、`cf_m_body_teights`、`cf_m_facemask`
+
+缓存版本 12 → 13：旧缓存里 `cf_m_body` 那条可能就是连裤袜的记录，需重建。
+
 ### 调整：全局皮肤改成「只应用作者编辑记录」+ 补齐贴图平铺
 
 之前的做法是把模板材质的**全部** shader 属性刷过去（584 个 float），连作者没碰过的

@@ -17,7 +17,7 @@ namespace KKPEHeightLock
     public static class SkinMaterialCache
     {
         private const string Magic = "KKSKIN01";
-        private const int Version = 12;    // 缓存格式变了就 +1，旧文件自动重建
+        private const int Version = 13;    // 缓存格式/取材质规则变了就 +1，旧文件自动重建
 
         private class TexSnap
         {
@@ -362,7 +362,11 @@ namespace KKPEHeightLock
                     {
                         // 顺序很重要：先让角色把材质刷成自己的、铺好身体/脸基础材质，再写快照。
                         // 这三步都会重建材质，放在写快照之后就会把改动盖回去。
-                        oc.charInfo.ReloadNoAsync(true, false, true, false);
+                        //
+                        // noChangeHead 必须是 true：Reload 会顺手重建整颗头（FaceBlendShape 重造），
+                        // 口型/表情的 openRate 不会回填，Timeline 的表情轨也会指向旧组件。
+                        // 关掉重建头，只刷身体/脸的贴图，脸部基础材质由下面的 SetFaceBaseMaterial 负责。
+                        oc.charInfo.ReloadNoAsync(true, true, true, false);
                         if (body != null) AutoExport.BodySnap.RestoreAll(oc, body);
 
                         var cc = oc.charInfo as ChaControl ?? oc.charInfo.GetComponent<ChaControl>();
@@ -430,13 +434,36 @@ namespace KKPEHeightLock
             _shaderLog += (_shaderLog.Length > 0 ? " | " : "") + pair;
         }
 
-        /// <summary>cf_m_body_00 / cf_m_body 都归到 cf_m_body，cf_m_face 同理；其他材质返回 null。</summary>
+        /// <summary>
+        /// 只认 cf_m_ 后面那个英文词正好是 body / face 的材质：
+        /// cf_m_body、cf_m_body_00、cf_m_body00 → body；cf_m_bodyteights（连裤袜）→ 不是。
+        /// </summary>
         private static string SkinBase(string matName)
         {
             string n = CleanName(matName).ToLowerInvariant();
-            if (n.StartsWith("cf_m_body")) return "cf_m_body";
-            if (n.StartsWith("cf_m_face")) return "cf_m_face";
+            string word = MatKind(n);
+            if (word == "body") return "cf_m_body";
+            if (word == "face") return "cf_m_face";
             return null;
+        }
+
+        /// <summary>取 "cf_m_" 之后连续的一串英文字母，且后面只能是数字 / 下划线（或直接结尾）。</summary>
+        private static string MatKind(string n)
+        {
+            const string prefix = "cf_m_";
+            if (!n.StartsWith(prefix)) return null;
+
+            int i = prefix.Length, start = i;
+            while (i < n.Length && n[i] >= 'a' && n[i] <= 'z') i++;
+            if (i == start) return null;
+
+            // 字母段之后只允许 cf_m_body_00 / cf_m_body00 这种，跟了别的字母（bodyteights、teights）就不算皮肤
+            for (int k = i; k < n.Length; k++)
+            {
+                char c = n[k];
+                if (c != '_' && (c < '0' || c > '9')) return null;
+            }
+            return n.Substring(start, i - start);
         }
 
         private static string CleanName(string s)
